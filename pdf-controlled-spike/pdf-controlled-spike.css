@@ -1,0 +1,351 @@
+.pdf-controlled-spike-page {
+  min-height: 100vh;
+  background: #f4f6fb;
+  color: #18212f;
+  padding: 20px 20px 32px;
+  box-sizing: border-box;
+  font-family:
+    Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.pdf-controlled-spike-hero {
+  max-width: 1100px;
+  margin: 0 auto 14px;
+}
+
+.pdf-controlled-spike-kicker {
+  margin: 0 0 6px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #57627a;
+}
+
+.pdf-controlled-spike-hero h1 {
+  margin: 0 0 8px;
+  font-size: 1.7rem;
+  line-height: 1.15;
+}
+
+.pdf-controlled-spike-summary {
+  max-width: 760px;
+  margin: 0 0 12px;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  color: #3a4659;
+}
+
+.pdf-controlled-spike-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.pdf-controlled-spike-button {
+  border: 1px solid #1f5fbf;
+  background: #1f5fbf;
+  color: #ffffff;
+  border-radius: 10px;
+  padding: 10px 16px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pdf-controlled-spike-button.secondary {
+  background: #ffffff;
+  color: #1f5fbf;
+}
+
+.pdf-controlled-spike-button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.pdf-controlled-spike-link {
+  color: #1f5fbf;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.pdf-controlled-spike-link:hover {
+  text-decoration: underline;
+}
+
+.pdf-controlled-spike-status,
+.pdf-controlled-spike-error {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.pdf-controlled-spike-status {
+  background: #e8eefb;
+  color: #27436f;
+}
+
+.pdf-controlled-spike-error {
+  margin-top: 10px;
+  background: #fdebea;
+  color: #8b2d27;
+}
+
+.pdf-controlled-spike-diagnostics {
+  border: 1px solid #d7dfef;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 10px 12px;
+}
+
+.pdf-controlled-spike-footer {
+  max-width: 1100px;
+  margin: 14px auto 0;
+}
+
+.pdf-controlled-spike-diagnostics summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #334057;
+}
+
+.pdf-controlled-spike-diagnostics pre {
+  margin: 10px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: #233044;
+}
+
+.pdf-controlled-spike-layout {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+  align-items: start;
+}
+
+.pdf-controlled-spike-stage,
+.pdf-controlled-spike-panel {
+  background: #ffffff;
+  border: 1px solid #d7dfef;
+  border-radius: 16px;
+  box-shadow: 0 16px 40px rgba(32, 53, 89, 0.08);
+}
+
+.pdf-controlled-spike-stage {
+  padding: 14px;
+}
+
+.pdf-controlled-spike-stage-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.pdf-controlled-spike-stage-header h2,
+.pdf-controlled-spike-panel h2 {
+  margin: 0 0 6px;
+  font-size: 1.05rem;
+}
+
+.pdf-controlled-spike-stage-header p,
+.pdf-controlled-spike-muted {
+  margin: 0;
+  color: #55627b;
+  line-height: 1.5;
+}
+
+.pdf-controlled-spike-file-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-end;
+  color: #55627b;
+  font-size: 0.9rem;
+  text-align: right;
+}
+
+.pdf-controlled-spike-canvas-shell {
+  overflow: auto;
+  border-radius: 12px;
+  background: #eef2f9;
+  padding: 16px;
+}
+
+.pdf-controlled-spike-canvas-wrap {
+  position: relative;
+  margin: 0 auto;
+  cursor: crosshair;
+  border: 1px solid #c6d2e6;
+  box-shadow: 0 12px 24px rgba(21, 31, 50, 0.12);
+  background: #ffffff;
+}
+
+.pdf-controlled-spike-canvas {
+  display: block;
+}
+
+.pdf-controlled-spike-marker {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  margin-top: -8px;
+  border-radius: 999px;
+  background: #d83b54;
+  border: 3px solid rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 0 4px rgba(216, 59, 84, 0.22);
+  pointer-events: none;
+}
+
+.pdf-controlled-spike-marker.is-pending {
+  background: #1f5fbf;
+  box-shadow: 0 0 0 4px rgba(31, 95, 191, 0.22);
+}
+
+.pdf-controlled-spike-empty {
+  min-height: 420px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  color: #5a667d;
+  background: #ffffff;
+  border-radius: 12px;
+  border: 1px dashed #c6d2e6;
+  padding: 24px;
+}
+
+.pdf-controlled-spike-sidebar {
+  display: grid;
+  gap: 12px;
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 32px);
+  overflow: hidden;
+}
+
+.pdf-controlled-spike-panel {
+  padding: 14px;
+}
+
+.pdf-controlled-spike-form {
+  display: block;
+}
+
+.pdf-controlled-spike-form-body {
+  display: grid;
+  gap: 10px;
+}
+
+.pdf-controlled-spike-coordinates {
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.pdf-controlled-spike-coordinates div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.9rem;
+}
+
+.pdf-controlled-spike-coordinates dt {
+  font-weight: 600;
+  color: #3d485d;
+}
+
+.pdf-controlled-spike-coordinates dd {
+  margin: 0;
+  color: #1c2533;
+}
+
+.pdf-controlled-spike-label {
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.pdf-controlled-spike-textarea {
+  resize: none;
+  min-height: 56px;
+  border-radius: 10px;
+  border: 1px solid #c8d2e4;
+  padding: 10px 12px;
+  font: inherit;
+}
+
+.pdf-controlled-spike-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 2px;
+}
+
+.pdf-controlled-spike-notes {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 10px;
+  max-height: 220px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.pdf-controlled-spike-subsection {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e1e7f2;
+}
+
+.pdf-controlled-spike-subsection h3 {
+  margin: 0 0 8px;
+  font-size: 0.98rem;
+}
+
+.pdf-controlled-spike-note {
+  display: grid;
+  gap: 4px;
+  color: #334057;
+}
+
+.pdf-controlled-spike-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+  color: #334057;
+}
+
+@media (max-width: 980px) {
+  .pdf-controlled-spike-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .pdf-controlled-spike-sidebar {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .pdf-controlled-spike-form {
+    max-height: none;
+  }
+
+  .pdf-controlled-spike-file-meta {
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .pdf-controlled-spike-stage-header {
+    flex-direction: column;
+  }
+}

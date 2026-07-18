@@ -1,0 +1,3 @@
+cd C:\Users\Andrew\Documents\Codex\2026-06-09-note-anchor-prototype
+$env:Path = "C:\Users\Andrew\Tools\node\node-v24.15.0-win-x64;" + $env:Path
+npm.cmd run tauri:dev

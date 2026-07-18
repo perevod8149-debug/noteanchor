@@ -1,0 +1,28 @@
+[package]
+name = "noteanchor"
+version = "0.4.1"
+description = "NoteAnchor desktop wrapper"
+authors = ["Andrew"]
+license = ""
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "noteanchor_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.2", features = [] }
+
+[dependencies]
+encoding_rs = "0.8"
+quick-xml = "0.38"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+tauri = { version = "2.11.2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+zip = { version = "2.4", default-features = false, features = ["deflate"] }

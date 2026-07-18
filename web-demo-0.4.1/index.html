@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NoteAnchor 0.4.1 Web Demo Mockup</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">NoteAnchor 0.4.1 demo</p>
+          <h1>NoteAnchor</h1>
+          <p class="subtitle">Contextual notes for text documents</p>
+          <p class="hero-text">
+            Attach notes to exact text fragments. Keep your documents local and unchanged.
+          </p>
+          <div class="hero-actions">
+            <a
+              class="button primary"
+              href="https://drive.google.com/file/d/1__X0KQvfV8tzRzyxS9bgU5yuQaDDd6ik/view?usp=drive_link"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Download beta
+            </a>
+            <button class="button secondary" id="replay-demo" type="button">Replay demo</button>
+          </div>
+          <p class="hero-note">Local Windows app. Original documents stay unchanged.</p>
+        </div>
+      </section>
+
+      <section class="demo-section">
+        <div class="demo-layout">
+          <aside class="story-panel">
+            <p class="eyebrow">Animated workflow</p>
+            <div class="step-number" id="step-counter">Step 1 of 7</div>
+            <h2 id="step-title">Open a document</h2>
+            <p class="story-copy" id="step-caption">
+              Start with a TXT or DOCX document.
+            </p>
+
+            <div class="story-note">
+              <div class="story-note-title">How it works</div>
+              <p id="step-side-note">
+                Work with exact text fragments, then come back to every note later with the
+                surrounding context intact.
+              </p>
+            </div>
+          </aside>
+
+          <div class="app-shell" id="mock-app">
+            <div class="window-topbar">
+              <div class="window-dots">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <div class="window-title">NoteAnchor</div>
+              <div class="window-status">Native notes</div>
+            </div>
+
+            <div class="toolbar">
+              <button class="toolbar-button active" id="toolbar-open">Open .txt</button>
+              <button class="toolbar-button">Open .docx</button>
+              <button class="toolbar-button" id="mock-add-note">Add note</button>
+              <button class="toolbar-button" id="toolbar-all-notes">All notes</button>
+              <button class="toolbar-button" id="toolbar-print-report">Print report</button>
+            </div>
+
+            <div class="workspace">
+              <section class="document-panel">
+                <div class="panel-head">
+                  <div>
+                    <div class="panel-title" id="document-title">sample-review-text.txt</div>
+                    <div class="panel-meta" id="document-type">TXT document</div>
+                  </div>
+                  <div class="panel-badge" id="document-badge">Review notes</div>
+                </div>
+
+                <article class="document-body" id="document-review">
+                  <p>
+                    Marian read the second page twice because one phrase kept troubling her: the
+                    town would be renewed through
+                    <span class="phrase phrase-primary" id="phrase-primary">modest boldness</span>.
+                    <span class="selection-tag hidden" id="selection-tag">Selected phrase</span>
+                  </p>
+                  <p>
+                    Another paragraph praised the market square for its
+                    <span class="phrase phrase-secondary" id="phrase-secondary">timeless new character</span>.
+                    The wording sounded polished, but it still needed evidence.
+                  </p>
+                </article>
+
+                <article class="document-body hidden" id="document-translation">
+                  <p>
+                    <span class="phrase phrase-translation" id="phrase-translation">
+                      When the rain stopped, the street did not brighten at once. The stones kept
+                      their dark color, and the puddles held a weak copy of the sky.
+                    </span>
+                  </p>
+                  <p>
+                    A woman crossed the square with a basket on her arm, and the whole street
+                    seemed to move more slowly after the storm.
+                  </p>
+                </article>
+              </section>
+
+              <aside class="notes-panel">
+                <div class="panel-head">
+                  <div>
+                    <div class="panel-title">Notes</div>
+                    <div class="panel-meta">Keep comments beside the text</div>
+                  </div>
+                  <div class="panel-badge" id="notes-badge">0 notes</div>
+                </div>
+
+                <div class="note-list">
+                  <article class="note-card note-card-primary hidden" id="note-primary">
+                    <div class="note-label">Selected text</div>
+                    <div class="note-fragment">modest boldness</div>
+                    <div class="note-label">Note</div>
+                    <div class="note-body">Too vague - rewrite this phrase.</div>
+                  </article>
+
+                  <article class="note-card note-card-secondary hidden" id="note-secondary">
+                    <div class="note-label">Selected text</div>
+                    <div class="note-fragment clamp-2">timeless new character</div>
+                    <div class="note-label">Note</div>
+                    <div class="note-body clamp-3">
+                      Sounds polished but unclear - needs evidence.
+                    </div>
+                  </article>
+
+                  <article class="note-card note-card-translation hidden" id="note-translation">
+                    <div class="note-label">Selected text</div>
+                    <div class="note-fragment clamp-3">
+                      When the rain stopped, the street did not brighten at once. The stones kept
+                      their dark color, and the puddles held a weak copy of the sky.
+                    </div>
+                    <div class="note-label">Note</div>
+                    <div class="note-body clamp-3">
+                      Translation draft: Після дощу вулиця не одразу посвітлішала.
+                    </div>
+                  </article>
+                </div>
+              </aside>
+            </div>
+
+            <div class="overlay all-notes hidden" id="all-notes-overlay">
+              <div class="overlay-card compact-card">
+                <div class="overlay-head">
+                  <div>
+                    <div class="panel-title">All notes</div>
+                    <div class="panel-meta">Search and reopen notes</div>
+                  </div>
+                </div>
+                <label class="search-field">
+                  <span>Search notes</span>
+                  <input id="all-notes-search" type="text" value="vague" readonly />
+                </label>
+                <div class="panel-meta overlay-count">1 of 2 notes</div>
+                <article class="all-note-result is-match" id="all-note-result">
+                  <div class="all-note-fragment">modest boldness</div>
+                  <div class="all-note-comment">Too vague - rewrite this phrase.</div>
+                  <button id="all-notes-open" type="button">Open</button>
+                </article>
+              </div>
+            </div>
+
+            <div class="overlay print-report hidden" id="print-report-overlay">
+              <div class="overlay-card report-card">
+                <div class="overlay-head">
+                  <div>
+                    <div class="panel-title">Print report</div>
+                    <div class="panel-meta">Readable output for selected text and notes</div>
+                  </div>
+                </div>
+                <div class="report-sheet">
+                  <div class="report-header">
+                    <div>
+                      <div class="report-app">NoteAnchor</div>
+                      <h3>Notes report</h3>
+                    </div>
+                    <div class="report-meta">
+                      <div>Document: sample-translation-text.txt</div>
+                      <div>Type: TXT</div>
+                      <div>Notes: 1</div>
+                    </div>
+                  </div>
+                  <article class="report-note">
+                    <div class="report-kicker">Note 1</div>
+                    <div class="report-label">Selected text</div>
+                    <p>
+                      When the rain stopped, the street did not brighten at once. The stones kept
+                      their dark color, and the puddles held a weak copy of the sky.
+                    </p>
+                    <div class="report-label">Note</div>
+                    <p>Translation draft: Після дощу вулиця не одразу посвітлішала.</p>
+                  </article>
+                </div>
+              </div>
+            </div>
+
+            <div class="final-banner hidden" id="final-banner">
+              Your documents stay on your computer. Original files are not changed.
+            </div>
+
+            <div class="demo-cursor" id="demo-cursor" aria-hidden="true">
+              <div class="demo-cursor-click"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="info-grid">
+        <article class="info-card">
+          <p class="eyebrow">Use cases</p>
+          <h2>What you can do with it</h2>
+          <ul>
+            <li>Review and editing notes</li>
+            <li>Translation-style notes</li>
+            <li>Research and reading notes</li>
+          </ul>
+        </article>
+
+        <article class="info-card">
+          <p class="eyebrow">Privacy and file handling</p>
+          <h2>Keep your files local</h2>
+          <ul>
+            <li>Local Windows app</li>
+            <li>No document upload</li>
+            <li>Original documents are not changed</li>
+            <li>Notes are saved beside the document as <code>.notes.json</code></li>
+          </ul>
+        </article>
+
+        <article class="info-card">
+          <p class="eyebrow">Current beta support</p>
+          <h2>Current beta support</h2>
+          <ul>
+            <li>Works with TXT files and DOCX plain-text import</li>
+            <li>Notes are saved beside the document</li>
+            <li>PDF, RTF, and multi-paragraph selection can be considered later</li>
+          </ul>
+        </article>
+      </section>
+    </main>
+
+    <script src="./demo.js"></script>
+  </body>
+</html>

@@ -1,0 +1,15 @@
+node_modules/
+dist/
+build/
+.vite/
+src-tauri/target/
+target/
+*.log
+.DS_Store
+Thumbs.db
+
+.agents/
+tmp/
+*.tmp
+*.cache
+*.zip
