@@ -14,7 +14,12 @@ import type {
   ReactNode,
 } from 'react'
 import { getDocument, GlobalWorkerOptions, Util } from 'pdfjs-dist'
-import type { PDFPageProxy, TextItem, TextMarkedContent } from 'pdfjs-dist/types/src/display/api'
+import type {
+  PDFDocumentProxy,
+  PDFPageProxy,
+  TextItem,
+  TextMarkedContent,
+} from 'pdfjs-dist/types/src/display/api'
 import { TextLayerBuilder } from 'pdfjs-dist/legacy/web/pdf_viewer.mjs'
 import PdfJsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker'
 import './App.css'
@@ -398,7 +403,7 @@ const experimentalPdfTextSelectionLineLimit = 5
 const experimentalPdfTextLayoutGuardMessage =
   'Text notes are unavailable on this page layout. Use Point note or Add note for page notes.'
 const previewOnlyPdfNotesMessage =
-  'Text notes are unavailable for this PDF. Use Add note for document notes.'
+  'Preview-only fallback: NoteAnchor could not render this PDF page directly, so it is shown in the embedded PDF viewer. Text may be selectable in the preview, but text-anchored notes and point notes are not available here. Use Add note for a page or document note.'
 const singleLineOnlyPdfTextMessage =
   'Text notes on this page are limited to one line. Use Point note or Add note for longer notes.'
 const invalidSidecarProtectedStatusMessage =
@@ -2924,6 +2929,12 @@ function App() {
   const pdfPageSpinIntentRef = useRef(false)
   const pdfLoadRequestIdRef = useRef(0)
   const pdfRenderRequestIdRef = useRef(0)
+  const pdfDocumentProxyRef = useRef<PDFDocumentProxy | null>(null)
+  const pdfDocumentLoadingTaskRef = useRef<ReturnType<typeof getDocument> | null>(null)
+  const pdfDocumentIdentityRef = useRef<{
+    filePath: string
+    sessionKey: number
+  } | null>(null)
   const currentPdfDocumentPathRef = useRef('')
   const currentPdfOpenSessionKeyRef = useRef(0)
   const currentPdfPageRef = useRef(1)
@@ -2991,6 +3002,7 @@ function App() {
   const [pdfRenderedPage, setPdfRenderedPage] = useState<PdfRenderedPageState | null>(null)
   const [pdfPendingRender, setPdfPendingRender] = useState<PdfPendingRenderState | null>(null)
   const [pdfRenderError, setPdfRenderError] = useState('')
+  const [pdfDocumentReadyKey, setPdfDocumentReadyKey] = useState('')
   const [pdfViewportWidth, setPdfViewportWidth] = useState(820)
   const [pdfInteractionMode, setPdfInteractionMode] = useState<'point' | 'text'>('point')
   const [pdfTextTokens, setPdfTextTokens] = useState<PdfTextToken[]>([])
@@ -3465,6 +3477,22 @@ function App() {
     persistPdfReadingPositionNow,
   ])
 
+  const clearCachedPdfDocument = useCallback(() => {
+    const loadingTask = pdfDocumentLoadingTaskRef.current
+    pdfDocumentLoadingTaskRef.current = null
+
+    if (loadingTask) {
+      void loadingTask.destroy().catch(() => {
+        // Ignore teardown races during document replacement.
+      })
+    }
+
+    pdfDocumentProxyRef.current = null
+
+    pdfDocumentIdentityRef.current = null
+    setPdfDocumentReadyKey('')
+  }, [])
+
   const teardownActivePdfBeforeDocumentReplacement = useCallback(() => {
     if (!isPdfDesktopDocument) {
       return
@@ -3474,6 +3502,7 @@ function App() {
     clearScheduledPdfReadingPersist()
     pdfLoadRequestIdRef.current += 1
     pdfRenderRequestIdRef.current += 1
+    clearCachedPdfDocument()
     currentPdfDocumentPathRef.current = ''
     currentPdfPageRef.current = 1
     pendingPdfReadingRestoreRef.current = null
@@ -3505,6 +3534,7 @@ function App() {
 
     resetPdfReadingScrollContainers()
   }, [
+    clearCachedPdfDocument,
     clearScheduledPdfReadingPersist,
     flushPdfReadingPositionPersist,
     isPdfDesktopDocument,
@@ -3989,6 +4019,7 @@ function App() {
     if (!isPdfDesktopDocument || !currentDocument.documentPath) {
       pdfLoadRequestIdRef.current += 1
       pdfRenderRequestIdRef.current += 1
+      clearCachedPdfDocument()
       setPdfRecoveryDiagnostic({
         dialogAccepted: null,
         recoveredLegacyPdfTextNotesCount: 0,
@@ -4050,12 +4081,13 @@ function App() {
         URL.revokeObjectURL(nextBlobUrl)
       }
     }
-  }, [currentDocument.documentPath, isPdfDesktopDocument])
+  }, [clearCachedPdfDocument, currentDocument.documentPath, isPdfDesktopDocument])
 
   useEffect(() => {
     if (!isPdfDesktopDocument || !currentDocument.documentPath) {
       pdfLoadRequestIdRef.current += 1
       pdfRenderRequestIdRef.current += 1
+      clearCachedPdfDocument()
       setPdfNotesListFilter('all')
       setPdfCurrentPage(1)
       setPdfPageCount(1)
@@ -4073,7 +4105,6 @@ function App() {
 
     let cancelled = false
     const filePath = currentDocument.documentPath ?? ''
-    const fileName = currentDocument.fileName
     const targetFilePath = normalizeDesktopFilePath(filePath)
     const targetSessionKey = pdfOpenSessionKey
     const loadRequestId = ++pdfLoadRequestIdRef.current
@@ -4129,7 +4160,13 @@ function App() {
           useWorkerFetch: false,
           verbosity: 0,
         })
+        pdfDocumentLoadingTaskRef.current = loadingTask
         const pdfDocument = await loadingTask.promise
+
+        if (pdfDocumentLoadingTaskRef.current === loadingTask) {
+          pdfDocumentLoadingTaskRef.current = null
+        }
+
         if (!isStaleLoadRequest() && isTrackingRecentPdfOpen) {
           setRecentOpenDiagnostic((current) => ({
             ...current,
@@ -4148,6 +4185,12 @@ function App() {
         )
 
         if (!isStaleLoadRequest()) {
+          pdfDocumentProxyRef.current = pdfDocument
+          pdfDocumentIdentityRef.current = {
+            filePath: targetFilePath,
+            sessionKey: targetSessionKey,
+          }
+          setPdfDocumentReadyKey(`${targetFilePath}::${targetSessionKey}`)
           setPdfPageCount(nextPdfPageCount)
           setPdfCurrentPage(resolvedPageNumber)
           setPdfPageInput(String(resolvedPageNumber))
@@ -4160,35 +4203,6 @@ function App() {
             }))
           }
         }
-
-        failureStep = 'pdf page fetch'
-        const page = await pdfDocument.getPage(resolvedPageNumber)
-        const baseViewport = page.getViewport({ scale: 1 })
-        const preferredWidth = Math.max(440, pdfViewportWidth - 32)
-        const scale = Math.max(0.68, Math.min(1.85, preferredWidth / baseViewport.width))
-        const viewport = page.getViewport({ scale })
-
-        if (isStaleLoadRequest()) {
-          return
-        }
-
-        setPdfRenderedPage({
-          filePath,
-          height: Math.ceil(viewport.height),
-          pageNumber: resolvedPageNumber,
-          requestId: loadRequestId,
-          sessionKey: targetSessionKey,
-          width: Math.ceil(viewport.width),
-        })
-        setPdfPendingRender({
-          fileName,
-          filePath,
-          page,
-          pageNumber: resolvedPageNumber,
-          requestId: loadRequestId,
-          sessionKey: targetSessionKey,
-          viewport,
-        })
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : 'Unknown controlled PDF render error.'
@@ -4224,19 +4238,170 @@ function App() {
 
     return () => {
       cancelled = true
-      if (loadingTask) {
-        void loadingTask.destroy()
+      if (loadingTask && pdfDocumentLoadingTaskRef.current === loadingTask) {
+        pdfDocumentLoadingTaskRef.current = null
+        void loadingTask.destroy().catch(() => {
+          // Ignore teardown races during document replacement.
+        })
       }
+    }
+  }, [
+    clearCachedPdfDocument,
+    currentDocument.documentPath,
+    recentOpenDiagnostic.normalizedPath,
+    recentOpenDiagnostic.source,
+    pdfOpenSessionKey,
+    isPdfDesktopDocument,
+  ])
+
+  useEffect(() => {
+    if (!isPdfDesktopDocument || !currentDocument.documentPath) {
+      return
+    }
+
+    const filePath = currentDocument.documentPath ?? ''
+    const fileName = currentDocument.fileName
+    const targetFilePath = normalizeDesktopFilePath(filePath)
+    const targetSessionKey = pdfOpenSessionKey
+    const targetReadyKey = `${targetFilePath}::${targetSessionKey}`
+    const cachedPdfDocument = pdfDocumentProxyRef.current
+    const cachedPdfDocumentIdentity = pdfDocumentIdentityRef.current
+
+    if (
+      !cachedPdfDocument ||
+      !cachedPdfDocumentIdentity ||
+      cachedPdfDocumentIdentity.filePath !== targetFilePath ||
+      cachedPdfDocumentIdentity.sessionKey !== targetSessionKey ||
+      pdfDocumentReadyKey !== targetReadyKey
+    ) {
+      return
+    }
+
+    let cancelled = false
+    const pageRequestId = ++pdfLoadRequestIdRef.current
+    const isTrackingRecentPdfOpen =
+      recentOpenDiagnostic.source === 'recent' &&
+      recentOpenDiagnostic.normalizedPath.toLowerCase() ===
+        normalizeDesktopFilePath(currentDocument.documentPath ?? '').toLowerCase()
+
+    const isStalePageRequest = (pageNumber: number) =>
+      cancelled ||
+      pageRequestId !== pdfLoadRequestIdRef.current ||
+      currentPdfDocumentPathRef.current !== targetFilePath ||
+      currentPdfOpenSessionKeyRef.current !== targetSessionKey ||
+      currentPdfPageRef.current !== pageNumber
+
+    const prepareControlledPdfPage = async () => {
+      let failureStep = 'pdf page fetch'
+
+      try {
+        setPdfRenderedPage(null)
+        setPdfPendingRender(null)
+        setPdfRenderError('')
+        setPdfTextTokens([])
+        setPdfTextLayerStatus('pending')
+        setPendingPdfTextSelection(null)
+        setPendingPdfPointAnchor(null)
+        window.getSelection()?.removeAllRanges()
+
+        const nextPdfPageCount = Math.max(1, cachedPdfDocument.numPages)
+        const requestedPageNumber = Math.min(
+          Math.max(1, pdfCurrentPage),
+          nextPdfPageCount,
+        )
+        const resolvedPageNumber = Math.min(
+          Math.max(1, requestedPageNumber),
+          nextPdfPageCount,
+        )
+
+        if (!isStalePageRequest(resolvedPageNumber)) {
+          setPdfPageCount(nextPdfPageCount)
+          setPdfCurrentPage(resolvedPageNumber)
+          setPdfPageInput(String(resolvedPageNumber))
+        }
+
+        const page = await cachedPdfDocument.getPage(resolvedPageNumber)
+        const baseViewport = page.getViewport({ scale: 1 })
+        const preferredWidth = Math.max(440, pdfViewportWidth - 32)
+        const scale = Math.max(0.68, Math.min(1.85, preferredWidth / baseViewport.width))
+        const viewport = page.getViewport({ scale })
+
+        if (isStalePageRequest(resolvedPageNumber)) {
+          return
+        }
+
+        if (isTrackingRecentPdfOpen) {
+          setRecentOpenDiagnostic((current) => ({
+            ...current,
+            status: `Recent open queued page ${resolvedPageNumber} for controlled render.`,
+          }))
+        }
+
+        setPdfRenderedPage({
+          filePath,
+          height: Math.ceil(viewport.height),
+          pageNumber: resolvedPageNumber,
+          requestId: pageRequestId,
+          sessionKey: targetSessionKey,
+          width: Math.ceil(viewport.width),
+        })
+        setPdfPendingRender({
+          fileName,
+          filePath,
+          page,
+          pageNumber: resolvedPageNumber,
+          requestId: pageRequestId,
+          sessionKey: targetSessionKey,
+          viewport,
+        })
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : 'Unknown controlled PDF render error.'
+
+        console.error('[NoteAnchor PDF] controlled page fetch failed:', error)
+
+        const pageNumberForError = Math.min(
+          Math.max(1, currentPdfPage),
+          Math.max(1, cachedPdfDocument.numPages),
+        )
+
+        if (isStalePageRequest(pageNumberForError)) {
+          return
+        }
+
+        setPdfRenderedPage(null)
+        setPdfPendingRender(null)
+        setPdfTextTokens([])
+        setPdfTextLayerStatus('empty')
+        setPendingPdfTextSelection(null)
+        setPendingPdfPointAnchor(null)
+        setPdfRenderError(errorMessage)
+
+        if (isTrackingRecentPdfOpen) {
+          setRecentOpenDiagnostic((current) => ({
+            ...current,
+            failedAt: failureStep,
+            status: `Recent open render failed at ${failureStep}: ${errorMessage}`,
+          }))
+        }
+      }
+    }
+
+    void prepareControlledPdfPage()
+
+    return () => {
+      cancelled = true
     }
   }, [
     currentDocument.documentPath,
     currentDocument.fileName,
+    currentPdfPage,
+    isPdfDesktopDocument,
+    pdfDocumentReadyKey,
+    pdfOpenSessionKey,
+    pdfViewportWidth,
     recentOpenDiagnostic.normalizedPath,
     recentOpenDiagnostic.source,
-    pdfOpenSessionKey,
-    pdfCurrentPage,
-    pdfViewportWidth,
-    isPdfDesktopDocument,
   ])
 
   useEffect(() => {
@@ -4885,9 +5050,7 @@ function App() {
 
   const handlePdfTextModeChange = useCallback((nextMode: 'point' | 'text') => {
     if (isPdfPreviewOnlyFallback) {
-      setDesktopOpenStatus(
-        'This PDF is using preview-only fallback mode. Text notes and point notes are unavailable for this document.',
-      )
+      setDesktopOpenStatus(previewOnlyPdfNotesMessage)
       return
     }
 
@@ -6629,6 +6792,7 @@ function App() {
   const handleCloseDocument = () => {
     if (isPdfDesktopDocument) {
       flushPdfReadingPositionPersist()
+      clearCachedPdfDocument()
     }
 
     desktopDocumentTransitionRef.current = {
@@ -9215,12 +9379,11 @@ function App() {
                     </div>
                   ) : pdfRenderError && pdfViewerSrc ? (
                     <div className="pdf-viewer-fallback">
-                      <div className="pdf-viewer-fallback-message">
-                        Controlled PDF preview failed. This document is open in preview-only fallback mode.
-                      </div>
-                      <div className="pdf-viewer-fallback-error">{pdfRenderError}</div>
-                      <div className="pdf-viewer-fallback-message">
-                        Text notes are unavailable for this PDF. Use the top-bar <code>Add note</code> action for document notes.
+                      <div className="pdf-viewer-fallback-notice" role="status">
+                        <span>{previewOnlyPdfNotesMessage}</span>
+                        <span className="pdf-viewer-fallback-detail">
+                          Technical detail: {pdfRenderError}
+                        </span>
                       </div>
                       <object
                         className="pdf-viewer-frame"

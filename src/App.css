@@ -1000,25 +1000,26 @@ button:disabled {
 
 .pdf-viewer-fallback {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.45rem;
 }
 
-.pdf-viewer-fallback-message {
-  padding: 0.85rem 1rem 0 1rem;
-  color: #5a6675;
-  font-size: 0.88rem;
-  font-weight: 600;
-  line-height: 1.4;
-}
-
-.pdf-viewer-fallback-error {
+.pdf-viewer-fallback-notice {
+  display: grid;
+  gap: 0.2rem;
   margin: 0 1rem;
-  padding: 0.7rem 0.8rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #ddd2bd;
   border-radius: 8px;
-  background: #fff2ef;
-  color: #8a352e;
-  font-size: 0.84rem;
-  line-height: 1.45;
+  background: #f7f1e7;
+  color: #5b5143;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.pdf-viewer-fallback-detail {
+  color: #786d5d;
+  font-size: 0.75rem;
+  line-height: 1.3;
 }
 
 .pdf-viewer-empty {
