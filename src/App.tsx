@@ -12,6 +12,7 @@ import type {
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
   ReactNode,
+  SetStateAction,
 } from 'react'
 import { getDocument, GlobalWorkerOptions, Util } from 'pdfjs-dist'
 import type {
@@ -324,6 +325,34 @@ type PdfStickyDiagnosticState = {
   topBarBottom: number | null
   viewerPaddingTop: string
   workspaceScrollTop: number
+}
+
+const initialPdfRecoveryDiagnosticState: PdfRecoveryDiagnosticState = {
+  dialogAccepted: null,
+  recoveredLegacyPdfTextNotesCount: 0,
+  recoveredNotesCount: 0,
+  recoveredPdfTextNotesCount: 0,
+  status: '',
+}
+
+const initialPdfRefreshDiagnosticState: PdfRefreshDiagnosticState = {
+  applied: false,
+  blockedReason: '',
+  requested: false,
+}
+
+const initialPdfTextHighlightDiagnosticState: PdfTextHighlightDiagnosticState = {
+  lastRefreshApplied: false,
+  lastSaveApplied: false,
+}
+
+const initialPdfSelectionDiagnosticState: PdfSelectionDiagnosticState = {
+  currentTokenFound: false,
+  moveActive: false,
+  resetReason: '',
+  spanBuilt: false,
+  startRequested: false,
+  startTokenFound: false,
 }
 
 type DesktopVisibleSaveStatus = {
@@ -3050,36 +3079,38 @@ function App() {
     useState<InvalidSidecarRecoveryState | null>(null)
   const [isInvalidSidecarRecoveryPending, setIsInvalidSidecarRecoveryPending] =
     useState(false)
-  const [, setPdfRecoveryDiagnostic] = useState<PdfRecoveryDiagnosticState>({
-    dialogAccepted: null,
-    recoveredLegacyPdfTextNotesCount: 0,
-    recoveredNotesCount: 0,
-    recoveredPdfTextNotesCount: 0,
-    status: '',
-  })
-  const [, setPdfRefreshDiagnostic] = useState<PdfRefreshDiagnosticState>({
-    applied: false,
-    blockedReason: '',
-    requested: false,
-  })
-  const [, setPdfTextHighlightDiagnostic] =
-    useState<PdfTextHighlightDiagnosticState>({
-      lastRefreshApplied: false,
-      lastSaveApplied: false,
-    })
-  const [, setPdfSelectionDiagnostic] = useState<PdfSelectionDiagnosticState>({
-    currentTokenFound: false,
-    moveActive: false,
-    resetReason: '',
-    spanBuilt: false,
-    startRequested: false,
-    startTokenFound: false,
-  })
+  const [initialPdfRecoveryDiagnosticForRef] = useState<PdfRecoveryDiagnosticState>(
+    initialPdfRecoveryDiagnosticState,
+  )
+  const [initialPdfRefreshDiagnosticForRef] = useState<PdfRefreshDiagnosticState>(
+    initialPdfRefreshDiagnosticState,
+  )
+  const [initialPdfTextHighlightDiagnosticForRef] = useState<PdfTextHighlightDiagnosticState>(
+    initialPdfTextHighlightDiagnosticState,
+  )
+  const [initialPdfSelectionDiagnosticForRef] = useState<PdfSelectionDiagnosticState>(
+    initialPdfSelectionDiagnosticState,
+  )
+  const pdfRecoveryDiagnosticRef = useRef<PdfRecoveryDiagnosticState>(
+    initialPdfRecoveryDiagnosticForRef,
+  )
+  const pdfRefreshDiagnosticRef = useRef<PdfRefreshDiagnosticState>(
+    initialPdfRefreshDiagnosticForRef,
+  )
+  const pdfTextHighlightDiagnosticRef = useRef<PdfTextHighlightDiagnosticState>(
+    initialPdfTextHighlightDiagnosticForRef,
+  )
+  const pdfSelectionDiagnosticRef = useRef<PdfSelectionDiagnosticState>(
+    initialPdfSelectionDiagnosticForRef,
+  )
   const [recentOpenDiagnostic, setRecentOpenDiagnostic] = useState<RecentOpenDiagnosticState>(
     initialRecentOpenDiagnosticState,
   )
-  const [, setPdfStickyDiagnostic] = useState<PdfStickyDiagnosticState>(
+  const [initialPdfStickyDiagnosticForRef] = useState<PdfStickyDiagnosticState>(
     initialPdfStickyDiagnosticState,
+  )
+  const pdfStickyDiagnosticRef = useRef<PdfStickyDiagnosticState>(
+    initialPdfStickyDiagnosticForRef,
   )
   const [isBridgePending, setIsBridgePending] = useState(false)
   const [isDesktopOpenPending, setIsDesktopOpenPending] = useState(false)
@@ -3107,6 +3138,53 @@ function App() {
     startLineId: string
     startTokenKey: string
   } | null>(null)
+
+  const setPdfRecoveryDiagnostic = (value: SetStateAction<PdfRecoveryDiagnosticState>) => {
+    pdfRecoveryDiagnosticRef.current =
+      typeof value === 'function'
+        ? (value as (current: PdfRecoveryDiagnosticState) => PdfRecoveryDiagnosticState)(
+            pdfRecoveryDiagnosticRef.current,
+          )
+        : value
+  }
+
+  const setPdfRefreshDiagnostic = (value: SetStateAction<PdfRefreshDiagnosticState>) => {
+    pdfRefreshDiagnosticRef.current =
+      typeof value === 'function'
+        ? (value as (current: PdfRefreshDiagnosticState) => PdfRefreshDiagnosticState)(
+            pdfRefreshDiagnosticRef.current,
+          )
+        : value
+  }
+
+  const setPdfTextHighlightDiagnostic = (
+    value: SetStateAction<PdfTextHighlightDiagnosticState>,
+  ) => {
+    pdfTextHighlightDiagnosticRef.current =
+      typeof value === 'function'
+        ? (value as (
+            current: PdfTextHighlightDiagnosticState,
+          ) => PdfTextHighlightDiagnosticState)(pdfTextHighlightDiagnosticRef.current)
+        : value
+  }
+
+  const setPdfSelectionDiagnostic = (value: SetStateAction<PdfSelectionDiagnosticState>) => {
+    pdfSelectionDiagnosticRef.current =
+      typeof value === 'function'
+        ? (value as (current: PdfSelectionDiagnosticState) => PdfSelectionDiagnosticState)(
+            pdfSelectionDiagnosticRef.current,
+          )
+        : value
+  }
+
+  const setPdfStickyDiagnostic = (value: SetStateAction<PdfStickyDiagnosticState>) => {
+    pdfStickyDiagnosticRef.current =
+      typeof value === 'function'
+        ? (value as (current: PdfStickyDiagnosticState) => PdfStickyDiagnosticState)(
+            pdfStickyDiagnosticRef.current,
+          )
+        : value
+  }
 
   const selectedPreview = useMemo(() => {
     if (selectedText.length <= 90) {
