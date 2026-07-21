@@ -772,6 +772,24 @@ button:disabled {
   line-height: 1.15;
 }
 
+.pdf-inline-status-notice {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.pdf-inline-status-label {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  padding: 0.08rem 0.38rem;
+  border-radius: 999px;
+  background: #ebe1cf;
+  color: #594d3e;
+  font-size: 0.69rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
 .pdf-text-note-button,
 .pdf-text-note-clear-button {
   min-height: 1.68rem;

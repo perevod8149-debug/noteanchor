@@ -3896,6 +3896,11 @@ function App() {
   const isPdfTextPageLayoutGuarded = pdfPageTextAnalysis?.isPdfTextPageLayoutGuarded ?? false
   const canSelectPdfTextMode =
     canUsePdfTextNotes && !isPdfTextPageLayoutGuarded && !isPdfPreviewOnlyFallback
+  const showPdfPointOnlyStatusNotice =
+    ENABLE_EXPERIMENTAL_PDF_TEXT_NOTES &&
+    !isPdfPreviewOnlyFallback &&
+    pdfInteractionMode !== 'text' &&
+    ((!canUsePdfTextNotes && canUsePdfPointNotes) || isPdfTextPageLayoutGuarded)
   const experimentalPdfTextNotes = useMemo(
     () =>
       ENABLE_EXPERIMENTAL_PDF_TEXT_NOTES
@@ -7329,7 +7334,11 @@ function App() {
           }))
         }
       const openedFileLabel =
-        openedFile.documentKind === 'docx' ? '.docx' : '.txt'
+        openedFile.documentKind === 'pdf'
+          ? '.pdf'
+          : openedFile.documentKind === 'docx'
+            ? '.docx'
+            : '.txt'
       console.info('[NoteAnchor desktop open] decoded encoding:', openedFile.encoding)
       console.info('[NoteAnchor desktop open] document kind:', openedFile.documentKind)
       console.info('[NoteAnchor desktop open] size bytes:', openedFile.sizeBytes)
@@ -9503,24 +9512,43 @@ function App() {
                     <div className="pdf-point-stage" key={`${pdfViewerRemountKey}-stage`}>
                         <div className="pdf-point-stage-header">
                           <div className="pdf-point-stage-label">
-                            {ENABLE_EXPERIMENTAL_PDF_TEXT_NOTES
-                              ? isPdfPreviewOnlyFallback
-                                ? previewOnlyPdfNotesMessage
-                                : !canUsePdfTextNotes
-                                  ? `Point mode selected. This rendered PDF page has no selectable text layer. Click the page to place a point note, or use Add note for a page note.`
-                                : pdfInteractionMode === 'text'
-                                ? isPdfTextPageLayoutGuarded
+                            {ENABLE_EXPERIMENTAL_PDF_TEXT_NOTES ? (
+                              isPdfPreviewOnlyFallback ? (
+                                previewOnlyPdfNotesMessage
+                              ) : showPdfPointOnlyStatusNotice ? (
+                                <div className="pdf-inline-status-notice">
+                                  <div className="pdf-inline-status-label">Point mode selected</div>
+                                  <div className="pdf-viewer-fallback-line pdf-viewer-fallback-line-available">
+                                    <span className="pdf-viewer-fallback-line-title">Available:</span>{' '}
+                                    <span>Point notes and page/document notes.</span>
+                                  </div>
+                                  <div className="pdf-viewer-fallback-line pdf-viewer-fallback-line-unavailable">
+                                    <span className="pdf-viewer-fallback-line-title">Unavailable:</span>{' '}
+                                    <span>
+                                      {!canUsePdfTextNotes
+                                        ? 'Text notes on this page.'
+                                        : 'Text notes on this page layout.'}
+                                    </span>
+                                  </div>
+                                  <div className="pdf-viewer-fallback-line">
+                                    Click the page to place a point note, or use Add note for a page note.
+                                  </div>
+                                </div>
+                              ) : pdfInteractionMode === 'text' ? (
+                                isPdfTextPageLayoutGuarded
                                   ? experimentalPdfTextLayoutGuardMessage
                                   : isPdfTextSingleLineOnlyLayout
                                     ? singleLineOnlyPdfTextMessage
-                                  : `Experimental PDF text-note mode: drag across one to five adjacent lines on rendered page ${currentPdfPage}, then add one note for that fragment.`
-                                : isPdfTextPageLayoutGuarded
-                                  ? `Point mode selected. Text notes are unavailable on this page layout. Use Point mode or Add note for page notes.`
-                                  : isPdfTextSingleLineOnlyLayout
-                                    ? `Point mode selected. Text notes on this page are limited to one line. Use Point mode or Add note for longer notes.`
-                                  : `Point mode selected. Click the page to place a point note, or switch to Text mode for fragment notes.`
-                              : 'PDF text notes are disabled in the production app. Use the current page field for page notes, or click the page to place a point note.'}
-                            </div>
+                                    : `Experimental PDF text-note mode: drag across one to five adjacent lines on rendered page ${currentPdfPage}, then add one note for that fragment.`
+                              ) : isPdfTextSingleLineOnlyLayout ? (
+                                `Point mode selected. Text notes on this page are limited to one line. Use Point mode or Add note for longer notes.`
+                              ) : (
+                                `Point mode selected. Click the page to place a point note, or switch to Text mode for fragment notes.`
+                              )
+                            ) : (
+                              'PDF text notes are disabled in the production app. Use the current page field for page notes, or click the page to place a point note.'
+                            )}
+                          </div>
                           </div>
                       <div className="pdf-point-shell" ref={pdfViewportHostRef}>
                         <div
