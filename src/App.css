@@ -1672,8 +1672,18 @@ button:disabled {
   display: flex;
   flex-direction: column;
   width: min(calc(100vw - 2rem), 620px);
-  max-height: 80vh;
+  max-height: calc(100vh - 2rem);
+  margin: 0;
   overflow: hidden;
+}
+
+.help-about-backdrop {
+  z-index: 18;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow: hidden;
+  padding: 1rem;
 }
 
 .print-preview-dialog {

@@ -56,7 +56,7 @@ const initialPdfStickyDiagnosticState: PdfStickyDiagnosticState = {
 
 const pdfReadingPositionStorageSuffix = '.pdf-reading-position.v1'
 const pdfReadingPositionSaveDelayMs = 180
-const appVersion = '0.4.0'
+const appVersion = '0.4.2'
 const pdfSidebarLongNoteCharacterThreshold = 280
 // Guarded PDF text-note availability is decided per document and per page below.
 // Do not disable the entire flow in production builds, or the installer diverges
@@ -9785,16 +9785,16 @@ function App() {
               <div className="document-empty-state-copy">
                 <h1>NoteAnchor</h1>
                 <p className="document-empty-state-subtitle">
-                  Add contextual notes to text without changing the original file.
+                  Add notes beside the source without changing the original file.
                 </p>
                 <ol className="document-empty-state-steps">
-                  <li>Open a .txt, .docx, or supported .pdf document</li>
-                  <li>Select text and add a note</li>
-                  <li>Export notes when ready</li>
+                  <li>Open a TXT, DOCX, or supported PDF document</li>
+                  <li>Add Text Notes, Point Notes, or page notes where supported</li>
+                  <li>Keep notes saved beside the original document</li>
                 </ol>
                 <p className="document-empty-state-note">
-                  Your original document is never changed. Notes are saved beside
-                  it as .notes.json.
+                  Original files stay unchanged. PDF support is limited in this
+                  version.
                 </p>
                 <div className="document-empty-state-actions">
                   <button
@@ -10379,12 +10379,19 @@ function App() {
       ) : null}
 
       {isHelpOpen ? (
-        <div className="modal-backdrop" role="presentation">
+        <div
+          className="modal-backdrop help-about-backdrop"
+          role="presentation"
+          onClick={closeHelp}
+        >
           <section
             aria-labelledby="help-about-title"
             aria-modal="true"
             className="confirm-dialog help-about-dialog"
             role="dialog"
+            onClick={(event) => {
+              event.stopPropagation()
+            }}
           >
             <div className="confirm-dialog-header help-about-header">
               <div className="help-about-header-copy">
@@ -10401,17 +10408,23 @@ function App() {
               </button>
             </div>
             <div className="confirm-dialog-body help-about-body">
-              <p>Add contextual notes to text without changing the original document.</p>
+              <p>
+                NoteAnchor is a local Windows app for notes beside TXT, DOCX, and
+                supported PDF documents.
+              </p>
 
               <div className="help-about-section">
                 <div className="help-about-label">Supported documents</div>
-                <div>TXT files.</div>
-                <div>DOCX files opened as plain text.</div>
+                <div>TXT files: Text Notes are available.</div>
+                <div>DOCX files: Text Notes are available in the simplified reading view.</div>
+                <div>PDF files: Text Notes are available when selectable text is available.</div>
+                <div>Supported rendered PDF pages may also allow Point Notes.</div>
               </div>
 
               <div className="help-about-section">
                 <div className="help-about-label">Important</div>
                 <div>Original files are not changed by NoteAnchor.</div>
+                <div>PDF support is limited in this version.</div>
               </div>
 
               <div className="help-about-section">
@@ -10423,12 +10436,28 @@ function App() {
                 <div className="help-about-label">Examples</div>
                 <div className="help-about-example">For document.txt: <code>document.notes.json</code></div>
                 <div className="help-about-example">For document.docx: <code>document.docx.notes.json</code></div>
+                <div className="help-about-example">For document.pdf: <code>document.pdf.notes.json</code></div>
               </div>
 
               <div className="help-about-section">
-                <div className="help-about-label">DOCX note</div>
-                <div>DOCX support is read-only plain text in this version.</div>
-                <div>Word formatting, images, comments, and tracked changes are not preserved.</div>
+                <div className="help-about-label">DOCX reading view</div>
+                <div>Original DOCX files are not changed.</div>
+                <div>
+                  NoteAnchor uses a simplified reading view, so complex Word layout,
+                  images, comments, or tracked changes may not appear exactly as they
+                  do in Word.
+                </div>
+              </div>
+
+              <div className="help-about-section">
+                <div className="help-about-label">PDF notes</div>
+                <div>PDF Text Notes require selectable text on a rendered page.</div>
+                <div>Point Notes may be available when NoteAnchor can render a stable PDF page.</div>
+                <div>
+                  In preview-only fallback, Text Notes and Point Notes are unavailable.
+                  Page or document notes remain available there.
+                </div>
+                <div>OCR is not included.</div>
               </div>
 
               <div className="help-about-section">
