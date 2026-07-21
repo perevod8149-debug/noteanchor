@@ -47,7 +47,7 @@ Notes are saved beside the source document.
 
 ## Current Limitations
 
-- DOCX formatting is not preserved.
+- Original DOCX files are not changed. NoteAnchor uses a simplified reading view, so complex DOCX layout may not appear exactly as in Word.
 - Some PDFs remain limited or preview-only.
 - Text Notes require usable text selection or rendered text support.
 - Point Notes require a supported rendered PDF page.
