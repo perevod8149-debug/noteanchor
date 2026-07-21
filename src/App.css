@@ -1005,7 +1005,7 @@ button:disabled {
 
 .pdf-viewer-fallback-notice {
   display: grid;
-  gap: 0.2rem;
+  gap: 0.26rem;
   margin: 0 1rem;
   padding: 0.55rem 0.7rem;
   border: 1px solid #ddd2bd;
@@ -1016,10 +1016,41 @@ button:disabled {
   line-height: 1.35;
 }
 
+.pdf-viewer-fallback-label {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  padding: 0.08rem 0.38rem;
+  border-radius: 999px;
+  background: #ebe1cf;
+  color: #594d3e;
+  font-size: 0.71rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
+
+.pdf-viewer-fallback-line {
+  color: #5b5143;
+}
+
+.pdf-viewer-fallback-line-title {
+  font-weight: 700;
+}
+
+.pdf-viewer-fallback-line-available {
+  color: #2f6a48;
+}
+
+.pdf-viewer-fallback-line-unavailable {
+  color: #8a4a45;
+}
+
 .pdf-viewer-fallback-detail {
   color: #786d5d;
   font-size: 0.75rem;
   line-height: 1.3;
+  margin-top: 0.05rem;
 }
 
 .pdf-viewer-empty {

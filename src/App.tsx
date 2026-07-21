@@ -414,6 +414,22 @@ type PdfTokenLineZone = {
   tokenCount: number
 }
 
+type PdfPageTextAnalysisState = {
+  hasRenderableTextItems: boolean
+  isPdfTextPageLayoutGuarded: boolean
+  isPdfTextSingleLineOnlyLayout: boolean
+  pdfParallelTextLineIds: Set<string>
+  pdfSuspiciousTextLineIds: Set<string>
+  tokenLines: PdfTokenLineCluster[]
+}
+
+type PdfPageTextAnalysisCacheEntry = PdfPageTextAnalysisState & {
+  cacheKey: string
+  pageNumber: number
+  textLayerStatus: PdfTextLayerStatus
+  tokens: PdfTextToken[]
+}
+
 type PendingPdfTextSelection = {
   anchor: NoteAnchor
   tokenKeys: string[]
@@ -430,11 +446,11 @@ const recentDocumentsStorageKey = 'noteanchor.recent-documents.v1'
 const recentDocumentsLimit = 10
 const experimentalPdfTextSelectionLineLimit = 5
 const experimentalPdfTextLayoutGuardMessage =
-  'Text notes are unavailable on this page layout. Use Point note or Add note for page notes.'
+  'Text notes are unavailable on this page layout. Use Point mode or Add note for page notes.'
 const previewOnlyPdfNotesMessage =
-  'Preview-only fallback: NoteAnchor could not render this PDF page directly, so it is shown in the embedded PDF viewer. Text may be selectable in the preview, but text-anchored notes and point notes are not available here. Use Add note for a page or document note.'
+  'Preview-only fallback: NoteAnchor could not render this PDF page directly, so it is shown in the embedded PDF viewer. Only page or document notes are available here. Text notes and point notes are unavailable. Use Add note for a page or document note.'
 const singleLineOnlyPdfTextMessage =
-  'Text notes on this page are limited to one line. Use Point note or Add note for longer notes.'
+  'Text notes on this page are limited to one line. Use Point mode or Add note for longer notes.'
 const invalidSidecarProtectedStatusMessage =
   'Invalid notes file - new notes are in memory only. The existing notes file will not be overwritten automatically.'
 let hasConfiguredPdfJsWorker = false
@@ -1737,10 +1753,15 @@ const createFileDocumentMetadata = (file: File): DocumentMetadata => {
     file.size,
     file.lastModified,
   ].join('-')
+  const documentKind: DocumentKind = isPdfDocumentPath(file.name)
+    ? 'pdf'
+    : isDocxDocumentPath(file.name)
+      ? 'docx'
+      : 'txt'
 
   return {
     documentId: `file-${safeId}`,
-    documentKind: 'txt',
+    documentKind,
     fileName: file.name,
     source: 'browser-file',
     fileSize: file.size,
@@ -2296,6 +2317,48 @@ const isDocxDocumentPath = (filePath?: string) =>
 
 const isPdfDocumentPath = (filePath?: string) =>
   typeof filePath === 'string' && /\.pdf$/i.test(filePath)
+
+const isLikelyTauriRuntimeWindow = () => {
+  if (typeof window === 'undefined') {
+    return false
+  }
+
+  const tauriWindow = window as Window & {
+    __TAURI__?: unknown
+    __TAURI_INTERNALS__?: unknown
+  }
+
+  return Boolean(tauriWindow.__TAURI__ || tauriWindow.__TAURI_INTERNALS__)
+}
+
+const detectBrowserSelectedDocumentKind = async (
+  file: File,
+): Promise<'txt' | 'docx' | 'pdf' | 'unsupported'> => {
+  if (isPdfDocumentPath(file.name) || file.type === 'application/pdf') {
+    return 'pdf'
+  }
+
+  if (
+    isDocxDocumentPath(file.name) ||
+    file.type ===
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  ) {
+    return 'docx'
+  }
+
+  if (/\.txt$/i.test(file.name) || file.type === 'text/plain') {
+    return 'txt'
+  }
+
+  const fileHeader = new Uint8Array(await file.slice(0, 8).arrayBuffer())
+  const pdfHeader = [0x25, 0x50, 0x44, 0x46, 0x2d]
+
+  if (pdfHeader.every((byte, index) => fileHeader[index] === byte)) {
+    return 'pdf'
+  }
+
+  return 'unsupported'
+}
 
 const escapeMarkdownText = (value: string) =>
   value
@@ -3034,9 +3097,11 @@ function App() {
   const [pdfDocumentReadyKey, setPdfDocumentReadyKey] = useState('')
   const [pdfViewportWidth, setPdfViewportWidth] = useState(820)
   const [pdfInteractionMode, setPdfInteractionMode] = useState<'point' | 'text'>('point')
-  const [pdfTextTokens, setPdfTextTokens] = useState<PdfTextToken[]>([])
+  const [, setPdfTextTokens] = useState<PdfTextToken[]>([])
   const [pdfTextLayerStatus, setPdfTextLayerStatus] =
     useState<PdfTextLayerStatus>('pending')
+  const [pdfPageTextAnalysis, setPdfPageTextAnalysis] =
+    useState<PdfPageTextAnalysisState | null>(null)
   const [pendingPdfTextSelection, setPendingPdfTextSelection] =
     useState<PendingPdfTextSelection | null>(null)
   const [pendingPdfPointAnchor, setPendingPdfPointAnchor] = useState<NoteAnchor | null>(null)
@@ -3102,6 +3167,140 @@ function App() {
   )
   const pdfSelectionDiagnosticRef = useRef<PdfSelectionDiagnosticState>(
     initialPdfSelectionDiagnosticForRef,
+  )
+  const pdfPageTextAnalysisCacheRef = useRef<Map<string, PdfPageTextAnalysisCacheEntry>>(
+    new Map(),
+  )
+
+  const clearPdfPageTextAnalysisCache = useCallback(() => {
+    pdfPageTextAnalysisCacheRef.current.clear()
+  }, [])
+
+  const buildPdfPageTextAnalysisCacheKey = useCallback(
+    (
+      filePath: string,
+      sessionKey: number,
+      pageNumber: number,
+      viewportWidth: number,
+      viewportHeight: number,
+    ) =>
+      [
+        normalizeDesktopFilePath(filePath),
+        sessionKey,
+        pageNumber,
+        viewportWidth.toFixed(3),
+        viewportHeight.toFixed(3),
+      ].join('::'),
+    [],
+  )
+
+  const computePdfPageTextAnalysis = useCallback(
+    (
+      tokens: PdfTextToken[],
+      pageWidth: number,
+      hasRenderableTextItems: boolean,
+    ): PdfPageTextAnalysisState => {
+      const tokenLines = buildPdfTokenLineClusters(tokens)
+      const pdfSuspiciousTextLineIds = new Set(
+        tokenLines
+          .filter((line) => isPdfTokenLineClusterSuspicious(line, pageWidth))
+          .map((line) => line.lineId),
+      )
+      const twoZoneCandidates = tokenLines
+        .map((line) => {
+          const zones = getPdfTokenLineZones(line)
+
+          if (zones.length !== 2) {
+            return null
+          }
+
+          const [leftZone, rightZone] = zones
+          const gap = Math.max(0, rightZone.left - leftZone.right)
+          const totalSpan = rightZone.right - leftZone.left
+          const leftStartRatio = leftZone.left / pageWidth
+          const rightStartRatio = rightZone.left / pageWidth
+          const gapRatio = gap / pageWidth
+
+          if (
+            leftZone.tokenCount < 1 ||
+            rightZone.tokenCount < 1 ||
+            gap < Math.max(28, pageWidth * 0.035) ||
+            totalSpan < pageWidth * 0.36
+          ) {
+            return null
+          }
+
+          return {
+            gapRatio,
+            leftStartRatio,
+            lineId: line.lineId,
+            rightStartRatio,
+            strongColumnCandidate:
+              leftStartRatio <= 0.26 &&
+              rightStartRatio >= 0.5 &&
+              gapRatio >= 0.08 &&
+              totalSpan >= pageWidth * 0.58,
+          }
+        })
+        .filter((candidate): candidate is {
+          gapRatio: number
+          leftStartRatio: number
+          lineId: string
+          rightStartRatio: number
+          strongColumnCandidate: boolean
+        } => Boolean(candidate))
+
+      let pdfParallelTextLineIds = new Set<string>()
+
+      if (twoZoneCandidates.length >= 2) {
+        const strongColumnCandidates = twoZoneCandidates.filter(
+          (candidate) => candidate.strongColumnCandidate,
+        )
+
+        if (strongColumnCandidates.length >= 2) {
+          pdfParallelTextLineIds = new Set(
+            strongColumnCandidates.map((candidate) => candidate.lineId),
+          )
+        } else {
+          const matchingCandidates = twoZoneCandidates.filter((candidate) => {
+            const similarLines = twoZoneCandidates.filter((otherCandidate) =>
+              Math.abs(otherCandidate.leftStartRatio - candidate.leftStartRatio) <= 0.1 &&
+              Math.abs(otherCandidate.rightStartRatio - candidate.rightStartRatio) <= 0.1 &&
+              Math.abs(otherCandidate.gapRatio - candidate.gapRatio) <= 0.05,
+            )
+
+            return similarLines.length >= 2
+          })
+
+          if (matchingCandidates.length >= 2) {
+            pdfParallelTextLineIds = new Set(
+              matchingCandidates.map((candidate) => candidate.lineId),
+            )
+          }
+        }
+      }
+
+      const pdfSuspiciousTextLineCount = pdfSuspiciousTextLineIds.size
+      const pdfSuspiciousTextLineRatio =
+        tokenLines.length > 0 ? pdfSuspiciousTextLineCount / tokenLines.length : 0
+      const pdfParallelTextLineCount = pdfParallelTextLineIds.size
+      const pdfParallelTextLineRatio =
+        tokenLines.length > 0 ? pdfParallelTextLineCount / tokenLines.length : 0
+
+      return {
+        hasRenderableTextItems,
+        isPdfTextPageLayoutGuarded:
+          tokenLines.length > 0 &&
+          (pdfSuspiciousTextLineCount >= 4 || pdfSuspiciousTextLineRatio >= 0.24),
+        isPdfTextSingleLineOnlyLayout:
+          tokenLines.length > 0 &&
+          (pdfParallelTextLineCount >= 2 || pdfParallelTextLineRatio >= 0.08),
+        pdfParallelTextLineIds,
+        pdfSuspiciousTextLineIds,
+        tokenLines,
+      }
+    },
+    [],
   )
   const [recentOpenDiagnostic, setRecentOpenDiagnostic] = useState<RecentOpenDiagnosticState>(
     initialRecentOpenDiagnosticState,
@@ -3566,10 +3765,10 @@ function App() {
     }
 
     pdfDocumentProxyRef.current = null
-
+    clearPdfPageTextAnalysisCache()
     pdfDocumentIdentityRef.current = null
     setPdfDocumentReadyKey('')
-  }, [])
+  }, [clearPdfPageTextAnalysisCache])
 
   const teardownActivePdfBeforeDocumentReplacement = useCallback(() => {
     if (!isPdfDesktopDocument) {
@@ -3592,6 +3791,7 @@ function App() {
     setPdfRenderError('')
     setPdfTextTokens([])
     setPdfTextLayerStatus('pending')
+    setPdfPageTextAnalysis(null)
     setPendingPdfTextSelection(null)
     setPendingPdfPointAnchor(null)
     setPdfBlobUrl('')
@@ -3689,128 +3889,13 @@ function App() {
 
     return [...savedMarkers, ...pendingMarker]
   }, [currentPdfPage, isPdfDesktopDocument, notes, pendingPdfPointAnchor])
-  const pdfTokenLines = useMemo(
-    () => buildPdfTokenLineClusters(pdfTextTokens),
-    [pdfTextTokens],
-  )
-  const pdfSuspiciousTextLineIds = useMemo(() => {
-    if (!pdfRenderedPage) {
-      return new Set<string>()
-    }
-
-    return new Set(
-      pdfTokenLines
-        .filter((line) => isPdfTokenLineClusterSuspicious(line, pdfRenderedPage.width))
-        .map((line) => line.lineId),
-    )
-  }, [pdfRenderedPage, pdfTokenLines])
-  const pdfSuspiciousTextLineCount = pdfSuspiciousTextLineIds.size
-  const pdfSuspiciousTextLineRatio =
-    pdfTokenLines.length > 0 ? pdfSuspiciousTextLineCount / pdfTokenLines.length : 0
-  const pdfParallelTextLineIds = useMemo(() => {
-    if (!pdfRenderedPage) {
-      return new Set<string>()
-    }
-
-    const pageWidth = pdfRenderedPage.width
-    const twoZoneCandidates = pdfTokenLines
-      .map((line) => {
-        const zones = getPdfTokenLineZones(line)
-
-        if (zones.length !== 2) {
-          return null
-        }
-
-        const [leftZone, rightZone] = zones
-        const gap = Math.max(0, rightZone.left - leftZone.right)
-        const totalSpan = rightZone.right - leftZone.left
-        const leftStartRatio = leftZone.left / pageWidth
-        const rightStartRatio = rightZone.left / pageWidth
-        const gapRatio = gap / pageWidth
-
-        if (
-          leftZone.tokenCount < 1 ||
-          rightZone.tokenCount < 1 ||
-          gap < Math.max(28, pageWidth * 0.035) ||
-          totalSpan < pageWidth * 0.36
-        ) {
-          return null
-        }
-
-        return {
-          gapRatio,
-          lineId: line.lineId,
-          leftStartRatio,
-          rightStartRatio,
-          strongColumnCandidate:
-            leftStartRatio <= 0.26 &&
-            rightStartRatio >= 0.5 &&
-            gapRatio >= 0.08 &&
-            totalSpan >= pageWidth * 0.58,
-        }
-      })
-      .filter((candidate): candidate is {
-        gapRatio: number
-        leftStartRatio: number
-        lineId: string
-        rightStartRatio: number
-        strongColumnCandidate: boolean
-      } => Boolean(candidate))
-
-    if (twoZoneCandidates.length < 2) {
-      return new Set<string>()
-    }
-
-    const strongColumnCandidates = twoZoneCandidates.filter(
-      (candidate) => candidate.strongColumnCandidate,
-    )
-
-    if (strongColumnCandidates.length >= 2) {
-      return new Set(strongColumnCandidates.map((candidate) => candidate.lineId))
-    }
-
-    const matchingCandidates = twoZoneCandidates.filter((candidate) => {
-      const similarLines = twoZoneCandidates.filter((otherCandidate) =>
-        Math.abs(otherCandidate.leftStartRatio - candidate.leftStartRatio) <= 0.1 &&
-        Math.abs(otherCandidate.rightStartRatio - candidate.rightStartRatio) <= 0.1 &&
-        Math.abs(otherCandidate.gapRatio - candidate.gapRatio) <= 0.05,
-      )
-
-      return similarLines.length >= 2
-    })
-
-    if (matchingCandidates.length < 2) {
-      return new Set<string>()
-    }
-
-    return new Set(
-      matchingCandidates.map((candidate) => candidate.lineId),
-    )
-  }, [pdfRenderedPage, pdfTokenLines])
-  const pdfParallelTextLineCount = pdfParallelTextLineIds.size
-  const pdfParallelTextLineRatio =
-    pdfTokenLines.length > 0 ? pdfParallelTextLineCount / pdfTokenLines.length : 0
-  const isPdfTextSingleLineOnlyLayout = useMemo(() => {
-    if (!pdfTokenLines.length) {
-      return false
-    }
-
-    return pdfParallelTextLineCount >= 2 || pdfParallelTextLineRatio >= 0.08
-  }, [pdfParallelTextLineCount, pdfParallelTextLineRatio, pdfTokenLines])
-  const isPdfTextPageLayoutGuarded = useMemo(() => {
-    if (!pdfTokenLines.length) {
-      return false
-    }
-
-    return (
-      pdfSuspiciousTextLineCount >= 4 ||
-      pdfSuspiciousTextLineRatio >= 0.24
-    )
-  }, [
-    pdfSuspiciousTextLineCount,
-    pdfSuspiciousTextLineRatio,
-    pdfTokenLines,
-  ])
+  const pdfTokenLines = pdfPageTextAnalysis?.tokenLines ?? []
+  const pdfSuspiciousTextLineIds = pdfPageTextAnalysis?.pdfSuspiciousTextLineIds ?? new Set()
+  const isPdfTextSingleLineOnlyLayout =
+    pdfPageTextAnalysis?.isPdfTextSingleLineOnlyLayout ?? false
+  const isPdfTextPageLayoutGuarded = pdfPageTextAnalysis?.isPdfTextPageLayoutGuarded ?? false
+  const canSelectPdfTextMode =
+    canUsePdfTextNotes && !isPdfTextPageLayoutGuarded && !isPdfPreviewOnlyFallback
   const experimentalPdfTextNotes = useMemo(
     () =>
       ENABLE_EXPERIMENTAL_PDF_TEXT_NOTES
@@ -4175,6 +4260,7 @@ function App() {
       setPdfRenderError('')
       setPdfTextTokens([])
       setPdfTextLayerStatus('pending')
+      setPdfPageTextAnalysis(null)
       setPendingPdfTextSelection(null)
       setPdfInteractionMode('point')
       setPendingPdfPointAnchor(null)
@@ -4208,6 +4294,7 @@ function App() {
         setPdfRenderError('')
         setPdfTextTokens([])
         setPdfTextLayerStatus('pending')
+        setPdfPageTextAnalysis(null)
         setPendingPdfTextSelection(null)
         setPendingPdfPointAnchor(null)
         window.getSelection()?.removeAllRanges()
@@ -4295,6 +4382,7 @@ function App() {
         setPdfPendingRender(null)
         setPdfTextTokens([])
         setPdfTextLayerStatus('empty')
+        setPdfPageTextAnalysis(null)
         setPendingPdfTextSelection(null)
         setPendingPdfPointAnchor(null)
         setPdfRenderError(errorMessage)
@@ -4378,6 +4466,7 @@ function App() {
         setPdfRenderError('')
         setPdfTextTokens([])
         setPdfTextLayerStatus('pending')
+        setPdfPageTextAnalysis(null)
         setPendingPdfTextSelection(null)
         setPendingPdfPointAnchor(null)
         window.getSelection()?.removeAllRanges()
@@ -4451,6 +4540,7 @@ function App() {
         setPdfPendingRender(null)
         setPdfTextTokens([])
         setPdfTextLayerStatus('empty')
+        setPdfPageTextAnalysis(null)
         setPendingPdfTextSelection(null)
         setPendingPdfPointAnchor(null)
         setPdfRenderError(errorMessage)
@@ -4648,14 +4738,14 @@ function App() {
   }, [currentDocument.documentId, isPdfDesktopDocument])
 
   useEffect(() => {
-    if (!isPdfDesktopDocument || pdfInteractionMode !== 'text' || pdfTextLayerStatus !== 'empty') {
+    if (!isPdfDesktopDocument || pdfInteractionMode !== 'text' || canSelectPdfTextMode) {
       return
     }
 
     setPdfInteractionMode('point')
     setPendingPdfTextSelection(null)
     setSelectionMessage('')
-  }, [isPdfDesktopDocument, pdfInteractionMode, pdfTextLayerStatus])
+  }, [canSelectPdfTextMode, isPdfDesktopDocument, pdfInteractionMode])
 
   useEffect(() => {
     if (!pdfPendingRender || !pdfRenderedPage) {
@@ -4726,7 +4816,17 @@ function App() {
           return
         }
 
+        const pageTextAnalysisCacheKey = buildPdfPageTextAnalysisCacheKey(
+          pdfPendingRender.filePath,
+          pdfPendingRender.sessionKey,
+          pdfPendingRender.pageNumber,
+          pdfPendingRender.viewport.width,
+          pdfPendingRender.viewport.height,
+        )
+        const cachedPageTextAnalysis =
+          pdfPageTextAnalysisCacheRef.current.get(pageTextAnalysisCacheKey) ?? null
         let textContentItems: Array<TextItem | TextMarkedContent> = []
+        let nextPageTextAnalysis: PdfPageTextAnalysisCacheEntry | null = null
 
         try {
           await textLayerBuilder.render({
@@ -4734,11 +4834,15 @@ function App() {
             viewport: pdfPendingRender.viewport,
           })
 
-          const textContent = await pdfPendingRender.page.getTextContent({
-            disableNormalization: true,
-            includeMarkedContent: true,
-          })
-          textContentItems = textContent.items
+          if (cachedPageTextAnalysis) {
+            nextPageTextAnalysis = cachedPageTextAnalysis
+          } else {
+            const textContent = await pdfPendingRender.page.getTextContent({
+              disableNormalization: true,
+              includeMarkedContent: true,
+            })
+            textContentItems = textContent.items
+          }
         } catch (textLayerError) {
           console.warn('[NoteAnchor PDF] text layer unavailable for rendered page:', textLayerError)
         }
@@ -4747,7 +4851,52 @@ function App() {
           return
         }
 
-        const hasRenderableTextItems = textContentItems.some(isRenderablePdfTextItem)
+        if (!nextPageTextAnalysis) {
+          const hasRenderableTextItems = textContentItems.some(isRenderablePdfTextItem)
+          const nextTokens: PdfTextToken[] = []
+
+          if (ENABLE_EXPERIMENTAL_PDF_TEXT_NOTES && hasRenderableTextItems) {
+            const itemGeometries = textContentItems
+              .filter(isRenderablePdfTextItem)
+              .map((item, itemIndex) =>
+                computePdfTextItemGeometry(
+                  item,
+                  pdfPendingRender.viewport,
+                  itemIndex,
+                  pdfPendingRender.pageNumber,
+                ),
+              )
+              .filter((item): item is PdfTextItemGeometry => item !== null)
+            let tokenIndex = 0
+
+            itemGeometries.forEach((itemGeometry) => {
+              const itemTokens = computePdfTextTokens(itemGeometry, tokenIndex)
+              nextTokens.push(...itemTokens)
+              tokenIndex += itemTokens.length
+            })
+          }
+
+          nextPageTextAnalysis = {
+            cacheKey: pageTextAnalysisCacheKey,
+            pageNumber: pdfPendingRender.pageNumber,
+            textLayerStatus:
+              ENABLE_EXPERIMENTAL_PDF_TEXT_NOTES && nextTokens.length > 0
+                ? 'available'
+                : 'empty',
+            tokens: nextTokens,
+            ...computePdfPageTextAnalysis(
+              nextTokens,
+              pdfPendingRender.viewport.width,
+              hasRenderableTextItems,
+            ),
+          }
+          pdfPageTextAnalysisCacheRef.current.set(
+            pageTextAnalysisCacheKey,
+            nextPageTextAnalysis,
+          )
+        }
+
+        const hasRenderableTextItems = nextPageTextAnalysis.hasRenderableTextItems
         const renderedCanvasLooksBlank = isRenderedPdfCanvasEffectivelyBlank(canvas)
 
         if (renderedCanvasLooksBlank && hasRenderableTextItems) {
@@ -4757,33 +4906,15 @@ function App() {
         }
 
         if (ENABLE_EXPERIMENTAL_PDF_TEXT_NOTES) {
-          const itemGeometries = textContentItems
-            .filter(isRenderablePdfTextItem)
-            .map((item, itemIndex) =>
-              computePdfTextItemGeometry(
-                item,
-                pdfPendingRender.viewport,
-                itemIndex,
-                pdfPendingRender.pageNumber,
-              ),
-            )
-            .filter((item): item is PdfTextItemGeometry => item !== null)
-          const nextTokens: PdfTextToken[] = []
-          let tokenIndex = 0
-
-          itemGeometries.forEach((itemGeometry) => {
-            const itemTokens = computePdfTextTokens(itemGeometry, tokenIndex)
-            nextTokens.push(...itemTokens)
-            tokenIndex += itemTokens.length
-          })
-
           if (!isStaleRenderRequest()) {
-            setPdfTextTokens(nextTokens)
-            setPdfTextLayerStatus(nextTokens.length > 0 ? 'available' : 'empty')
+            setPdfTextTokens(nextPageTextAnalysis.tokens)
+            setPdfTextLayerStatus(nextPageTextAnalysis.textLayerStatus)
+            setPdfPageTextAnalysis(nextPageTextAnalysis)
           }
         } else if (!isStaleRenderRequest()) {
           setPdfTextTokens([])
           setPdfTextLayerStatus('empty')
+          setPdfPageTextAnalysis(null)
         }
 
         if (isStaleRenderRequest()) {
@@ -4805,6 +4936,7 @@ function App() {
         setPdfPendingRender(null)
         setPdfTextTokens([])
         setPdfTextLayerStatus('empty')
+        setPdfPageTextAnalysis(null)
         setPendingPdfPointAnchor(null)
         setPdfRenderError(errorMessage)
       }
@@ -4818,7 +4950,12 @@ function App() {
       textLayerBuilder.cancel()
       textLayerHost.replaceChildren()
     }
-  }, [pdfPendingRender, pdfRenderedPage])
+  }, [
+    buildPdfPageTextAnalysisCacheKey,
+    computePdfPageTextAnalysis,
+    pdfPendingRender,
+    pdfRenderedPage,
+  ])
 
   useEffect(() => {
     if (!isPdfDesktopDocument || !activeNote || !getPdfAnchorType(activeNote)) {
@@ -5141,16 +5278,24 @@ function App() {
       setPdfInteractionMode(nextMode)
       setPendingDeleteNoteId(null)
       clearTemporarySelection(true)
-      setDesktopOpenStatus('PDF point-note mode is active.')
+      setDesktopOpenStatus(
+        canSelectPdfTextMode
+          ? `Point mode selected. Click the page to place a point note, or switch to Text mode for fragment notes.`
+          : canUsePdfTextNotes
+            ? experimentalPdfTextLayoutGuardMessage
+            : 'Point mode selected. Click the page to place a point note.',
+      )
       return
     }
 
-    if (!canUsePdfTextNotes) {
+    if (!canSelectPdfTextMode) {
       setPendingPdfPointAnchor(null)
       setDesktopOpenStatus(
-        canUsePdfPointNotes
-          ? 'This rendered PDF page has no selectable text layer. Use Point mode or Add note.'
-          : 'Text notes are unavailable until the PDF page is rendered.',
+        isPdfTextPageLayoutGuarded
+          ? experimentalPdfTextLayoutGuardMessage
+          : canUsePdfPointNotes
+            ? 'This rendered PDF page has no selectable text layer. Use Point mode or Add note for page notes.'
+            : 'Text notes are unavailable until the PDF page is rendered.',
       )
       return
     }
@@ -5167,10 +5312,12 @@ function App() {
         : `Experimental PDF text-note mode is active on page ${currentPdfPage}. Drag across up to five adjacent lines to select a fragment.`,
     )
   }, [
+    canSelectPdfTextMode,
     canUsePdfPointNotes,
     canUsePdfTextNotes,
     clearTemporarySelection,
     currentPdfPage,
+    experimentalPdfTextLayoutGuardMessage,
     isPdfPreviewOnlyFallback,
     isPdfTextPageLayoutGuarded,
     isPdfTextSingleLineOnlyLayout,
@@ -6917,13 +7064,17 @@ function App() {
     try {
       const { isTauri } = await import('@tauri-apps/api/core')
 
-      if (isTauri()) {
+      if (isTauri() || isLikelyTauriRuntimeWindow()) {
         setIsRecentDocumentsOpen(false)
         await handleOpenDesktopDocumentFile()
         return
       }
-    } catch {
-      // Fall back to the browser file picker outside Tauri.
+    } catch (error) {
+      if (isLikelyTauriRuntimeWindow()) {
+        const errorMessage = getBridgeErrorMessage(error)
+        setDesktopOpenStatus(`Desktop file open error: ${errorMessage}`)
+        return
+      }
     }
 
     handleOpenTextFile()
@@ -7010,6 +7161,7 @@ function App() {
       setPdfRenderError('')
       setPdfTextTokens([])
       setPdfTextLayerStatus('pending')
+      setPdfPageTextAnalysis(null)
       setPendingPdfTextSelection(null)
       setPendingPdfPointAnchor(null)
       setCurrentDocument(nextDocument)
@@ -7665,6 +7817,38 @@ function App() {
     event.target.value = ''
 
     if (!file) {
+      return
+    }
+
+    const detectedDocumentKind = await detectBrowserSelectedDocumentKind(file)
+
+    if (detectedDocumentKind === 'pdf') {
+      setDesktopOpenStatus(
+        'PDF opening must use the desktop PDF path. This browser fallback will not open PDF files as text.',
+      )
+      window.alert(
+        'PDF opening is available through the desktop NoteAnchor app path. This browser fallback will not open PDF files as plain text.',
+      )
+      return
+    }
+
+    if (detectedDocumentKind === 'docx') {
+      setDesktopOpenStatus(
+        'DOCX opening must use the desktop document path. This browser fallback does not decode DOCX files.',
+      )
+      window.alert(
+        'DOCX opening is available through the desktop NoteAnchor app path. This browser fallback does not decode DOCX files.',
+      )
+      return
+    }
+
+    if (detectedDocumentKind !== 'txt') {
+      setDesktopOpenStatus(
+        'Unsupported browser-opened file. Use a .txt file here, or use the desktop app path for PDF and DOCX.',
+      )
+      window.alert(
+        'This browser fallback can open plain text files only. Use the desktop NoteAnchor app path for PDF and DOCX documents.',
+      )
       return
     }
 
@@ -8727,7 +8911,7 @@ function App() {
                 Link again
               </button>
               <input
-                accept=".txt,text/plain"
+                accept=".txt,.docx,.pdf,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 className="file-input"
                 onChange={handleTextFileSelected}
                 ref={fileInputRef}
@@ -8828,11 +9012,11 @@ function App() {
                 <>
                   <button
                     className={
-                      pdfInteractionMode === 'text'
+                      pdfInteractionMode === 'text' && canSelectPdfTextMode
                         ? 'secondary-action-button pdf-text-note-button'
                         : 'pdf-text-note-clear-button'
                     }
-                    disabled={!canUsePdfTextNotes}
+                    disabled={!canSelectPdfTextMode}
                     type="button"
                     onClick={() => handlePdfTextModeChange('text')}
                   >
@@ -9323,7 +9507,7 @@ function App() {
                               ? isPdfPreviewOnlyFallback
                                 ? previewOnlyPdfNotesMessage
                                 : !canUsePdfTextNotes
-                                  ? `Point-note mode is active on page ${currentPdfPage}. This rendered PDF page has no selectable text layer. Click the page to place a point note.`
+                                  ? `Point mode selected. This rendered PDF page has no selectable text layer. Click the page to place a point note, or use Add note for a page note.`
                                 : pdfInteractionMode === 'text'
                                 ? isPdfTextPageLayoutGuarded
                                   ? experimentalPdfTextLayoutGuardMessage
@@ -9331,10 +9515,10 @@ function App() {
                                     ? singleLineOnlyPdfTextMessage
                                   : `Experimental PDF text-note mode: drag across one to five adjacent lines on rendered page ${currentPdfPage}, then add one note for that fragment.`
                                 : isPdfTextPageLayoutGuarded
-                                  ? `Point-note mode is active on page ${currentPdfPage}. Text notes are unavailable on this page layout. Use Point note or Add note for page notes.`
+                                  ? `Point mode selected. Text notes are unavailable on this page layout. Use Point mode or Add note for page notes.`
                                   : isPdfTextSingleLineOnlyLayout
-                                    ? `Point-note mode is active on page ${currentPdfPage}. Text notes on this page are limited to one line. Use Point note or Add note for longer notes.`
-                                  : `Point-note mode is active on page ${currentPdfPage}. Click the rendered page to place a point note, or switch to Text mode for experimental fragment notes.`
+                                    ? `Point mode selected. Text notes on this page are limited to one line. Use Point mode or Add note for longer notes.`
+                                  : `Point mode selected. Click the page to place a point note, or switch to Text mode for fragment notes.`
                               : 'PDF text notes are disabled in the production app. Use the current page field for page notes, or click the page to place a point note.'}
                             </div>
                           </div>
@@ -9458,7 +9642,18 @@ function App() {
                   ) : pdfRenderError && pdfViewerSrc ? (
                     <div className="pdf-viewer-fallback">
                       <div className="pdf-viewer-fallback-notice" role="status">
-                        <span>{previewOnlyPdfNotesMessage}</span>
+                        <div className="pdf-viewer-fallback-label">Preview-only fallback</div>
+                        <div className="pdf-viewer-fallback-line pdf-viewer-fallback-line-available">
+                          <span className="pdf-viewer-fallback-line-title">Available:</span>{' '}
+                          <span>Page notes and document notes.</span>
+                        </div>
+                        <div className="pdf-viewer-fallback-line pdf-viewer-fallback-line-unavailable">
+                          <span className="pdf-viewer-fallback-line-title">Unavailable:</span>{' '}
+                          <span>Text notes and point notes.</span>
+                        </div>
+                        <div className="pdf-viewer-fallback-line">
+                          Use Add note to create a page or document note.
+                        </div>
                         <span className="pdf-viewer-fallback-detail">
                           Technical detail: {pdfRenderError}
                         </span>
