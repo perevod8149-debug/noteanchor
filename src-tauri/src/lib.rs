@@ -311,7 +311,7 @@ fn open_pdf_file(bytes: &[u8], size_bytes: u64, modified_at: Option<u64>) -> Ope
         document_kind: "pdf".to_string(),
         encoding: "binary-pdf".to_string(),
         text: String::new(),
-        warning: Some("PDF support is experimental.".to_string()),
+        warning: Some("PDF support is limited in this version.".to_string()),
         size_bytes,
         modified_at,
     }
@@ -566,7 +566,7 @@ fn open_document_file(document_path: String) -> Result<OpenedTextFile, String> {
         Some("pdf") => open_pdf_file(&bytes, metadata.len(), modified_at),
         _ => {
             return Err(format!(
-                "Unsupported document type for {}. NoteAnchor currently supports .txt, .docx, and experimental .pdf.",
+                "Unsupported document type for {}. NoteAnchor currently supports .txt, .docx, and supported .pdf files.",
                 normalized_path.display()
             ))
         }

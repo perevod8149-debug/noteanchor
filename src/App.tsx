@@ -25,15 +25,6 @@ import { TextLayerBuilder } from 'pdfjs-dist/legacy/web/pdf_viewer.mjs'
 import PdfJsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker'
 import './App.css'
 
-const sampleParagraphs = [
-  'The morning edition arrived folded beneath the door, carrying the faint scent of ink and rain from the street outside.',
-  'Clara set it beside her cup and opened the window a little, just enough to hear the tram bells moving through the avenue.',
-  'She had promised herself she would read only one page before work, but the essay held her with its patient sentences and careful turns.',
-  'A small star marked one line.',
-  'The mark felt like an invitation from another reader.',
-  'By the time the clock struck nine, the city had brightened, and Clara closed the paper with the feeling that the day had already begun speaking.',
-]
-
 const initialRecentOpenDiagnosticState: RecentOpenDiagnosticState = {
   active: false,
   failedAt: '',
@@ -63,9 +54,6 @@ const initialPdfStickyDiagnosticState: PdfStickyDiagnosticState = {
   workspaceScrollTop: 0,
 }
 
-const sampleDocumentId = 'sample-document'
-const sampleFileName = 'sample-document.txt'
-const sampleNotesStorageKey = `noteanchor.${sampleDocumentId}.notes.v1`
 const pdfReadingPositionStorageSuffix = '.pdf-reading-position.v1'
 const pdfReadingPositionSaveDelayMs = 180
 const appVersion = '0.4.0'
@@ -1324,14 +1312,6 @@ const pickBestAnchorMatch = (
   })[0]
 }
 
-const sampleDocumentMetadata: DocumentMetadata = {
-  documentId: sampleDocumentId,
-  documentKind: 'sample',
-  fileName: sampleFileName,
-  source: 'sample',
-  storageKey: sampleNotesStorageKey,
-}
-
 const emptyDocumentMetadata: DocumentMetadata = {
   documentId: 'empty-document',
   documentKind: 'empty',
@@ -2476,7 +2456,7 @@ const readDesktopDocumentBytes = async (documentPath: string) => {
 
 const getDocumentTypeLabel = (document: DocumentMetadata) => {
   if (document.source === 'desktop-file' && isPdfDocumentPath(document.documentPath)) {
-    return 'PDF experimental'
+    return 'PDF (limited in this version)'
   }
 
   if (document.source === 'desktop-file' && isDocxDocumentPath(document.documentPath)) {
@@ -3083,8 +3063,8 @@ function App() {
     width: 0,
   })
   const [topBarHeight, setTopBarHeight] = useState(0)
-  const [currentDocument, setCurrentDocument] = useState(sampleDocumentMetadata)
-  const [currentParagraphs, setCurrentParagraphs] = useState(sampleParagraphs)
+  const [currentDocument, setCurrentDocument] = useState(emptyDocumentMetadata)
+  const [currentParagraphs, setCurrentParagraphs] = useState<string[]>([])
   const [pdfBlobUrl, setPdfBlobUrl] = useState('')
   const [pdfPageInput, setPdfPageInput] = useState('1')
   const [pdfCurrentPage, setPdfCurrentPage] = useState(1)
@@ -3321,14 +3301,7 @@ function App() {
   const [recentDocuments, setRecentDocuments] = useState<RecentDocumentEntry[]>(
     () => loadRecentDocuments(),
   )
-  const [notes, setNotes] = useState<Note[]>(() =>
-    ensureUniqueNoteIds(
-      loadSavedNotes(
-        sampleDocumentMetadata.storageKey,
-        sampleDocumentMetadata.documentId,
-      ),
-    ),
-  )
+  const [notes, setNotes] = useState<Note[]>([])
   const pdfTextDragStateRef = useRef<{
     hasMoved: boolean
     pointerId: number
@@ -3465,8 +3438,6 @@ function App() {
   const documentTitle =
     currentDocument.source === 'empty'
       ? ''
-      : currentDocument.documentId === sampleDocumentId
-      ? 'A Morning Note'
       : currentDocument.fileName
 
   const hasOpenDocument = currentDocument.source !== 'empty'
@@ -3584,7 +3555,7 @@ function App() {
     ? 'Open document to start'
     : isDesktopDocument
       ? isPdfDesktopDocument
-        ? 'PDF experimental'
+        ? 'PDF (limited in this version)'
         : isDocxDesktopDocument
         ? 'Native notes'
         : 'Native notes enabled'
@@ -5314,7 +5285,7 @@ function App() {
         ? experimentalPdfTextLayoutGuardMessage
         : isPdfTextSingleLineOnlyLayout
           ? singleLineOnlyPdfTextMessage
-        : `Experimental PDF text-note mode is active on page ${currentPdfPage}. Drag across up to five adjacent lines to select a fragment.`,
+        : `PDF text-note mode is active on page ${currentPdfPage}. Drag across up to five adjacent lines to select a fragment.`,
     )
   }, [
     canSelectPdfTextMode,
@@ -5501,7 +5472,7 @@ function App() {
       }))
       commitPendingPdfTextSelection(
         null,
-        'Experimental PDF text notes currently support up to five adjacent lines on the rendered page.',
+        'PDF text notes currently support up to five adjacent lines on the rendered page.',
       )
       return
     }
@@ -7021,8 +6992,7 @@ function App() {
 
   const handleCloseDocument = () => {
     if (isPdfDesktopDocument) {
-      flushPdfReadingPositionPersist()
-      clearCachedPdfDocument()
+      teardownActivePdfBeforeDocumentReplacement()
     }
 
     desktopDocumentTransitionRef.current = {
@@ -7629,7 +7599,7 @@ function App() {
             restoredNotes.length
               ? `Opened ${nextDocument.fileName} and restored ${restoredNotes.length} note${restoredNotes.length === 1 ? '' : 's'}.`
               : openedFile.documentKind === 'pdf'
-                ? `Opened ${nextDocument.fileName}. PDF support is experimental.`
+                ? `Opened ${nextDocument.fileName}. PDF support is limited in this version.`
                 : `Opened ${nextDocument.fileName}${openedFileLabel === '.docx' ? ' as plain text' : ''}.`,
           )
         }
@@ -8939,7 +8909,7 @@ function App() {
                   currentDocument.source !== 'desktop-file'
                     ? 'Export is available for desktop-opened documents.'
                     : isPdfDesktopDocument
-                      ? 'Export notes is not part of the PDF prototype yet.'
+                      ? 'Export notes is unavailable for PDFs in this version.'
                     : notes.length
                       ? undefined
                       : 'There are no notes to export.'
@@ -8957,7 +8927,7 @@ function App() {
                   !hasOpenDocument
                     ? 'Open a document to print its notes.'
                     : isPdfDesktopDocument
-                      ? 'Print report is not part of the PDF prototype yet.'
+                      ? 'Print report is unavailable for PDFs in this version.'
                     : notes.length
                       ? 'Print a notes report for the current document.'
                       : 'There are no notes to print.'
@@ -9120,7 +9090,7 @@ function App() {
                 onChange={(event) => setDocumentSearchText(event.target.value)}
                 placeholder={
                   isPdfDesktopDocument
-                    ? 'Find is not available for PDF prototype yet'
+                    ? 'Find is unavailable for PDFs in this version'
                     : 'Find in text...'
                 }
                 type="text"
@@ -9268,7 +9238,7 @@ function App() {
                     <>
                       <div className="info-panel-row">
                         <span className="info-panel-label">Document type</span>
-                        <span className="info-panel-value">PDF support is experimental</span>
+                        <span className="info-panel-value">PDF support is limited in this version</span>
                       </div>
                       <div className="info-panel-row">
                         <span className="info-panel-label">Original file</span>
@@ -9286,7 +9256,7 @@ function App() {
                     <span className="info-panel-label">Export file</span>
                     <span className="info-panel-value info-panel-value-path" title={currentDesktopExportPath || undefined}>
                       {currentDesktopExportPath || (isPdfDesktopDocument
-                        ? 'Not part of the PDF prototype yet'
+                        ? 'Unavailable for PDFs in this version'
                         : 'Available only for desktop-opened documents')}
                     </span>
                   </div>
@@ -9539,7 +9509,7 @@ function App() {
                                   ? experimentalPdfTextLayoutGuardMessage
                                   : isPdfTextSingleLineOnlyLayout
                                     ? singleLineOnlyPdfTextMessage
-                                    : `Experimental PDF text-note mode: drag across one to five adjacent lines on rendered page ${currentPdfPage}, then add one note for that fragment.`
+                                    : `PDF text-note mode: drag across one to five adjacent lines on the rendered page ${currentPdfPage}, then add one note for that fragment.`
                               ) : isPdfTextSingleLineOnlyLayout ? (
                                 `Point mode selected. Text notes on this page are limited to one line. Use Point mode or Add note for longer notes.`
                               ) : (
@@ -9732,7 +9702,7 @@ function App() {
                   Add contextual notes to text without changing the original file.
                 </p>
                 <ol className="document-empty-state-steps">
-                  <li>Open a .txt, .docx, or experimental .pdf document</li>
+                  <li>Open a .txt, .docx, or supported .pdf document</li>
                   <li>Select text and add a note</li>
                   <li>Export notes when ready</li>
                 </ol>
@@ -10052,7 +10022,7 @@ function App() {
                         ? 'Use Point note or Add note for page notes.'
                         : isPdfTextSingleLineOnlyLayout
                           ? 'Only one-line text notes are available on this page layout.'
-                          : 'In Text mode, drag across up to five adjacent lines on the current page to add an experimental PDF text note. Point notes and page notes still work.'
+                          : 'In Text mode, drag across up to five adjacent lines on the current page to add a PDF text note. Point notes and page notes still work.'
                       : 'Select PDF text, click the current page for a point note, or use the page field for a legacy-compatible PDF page note.'
                   : 'Select a fragment in the document to add a note.'}
               </div>
