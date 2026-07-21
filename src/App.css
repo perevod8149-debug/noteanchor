@@ -772,12 +772,19 @@ button:disabled {
   line-height: 1.15;
 }
 
-.pdf-inline-status-notice {
+.pdf-inline-status-notice,
+.note-guidance-notice {
   display: grid;
   gap: 0.18rem;
 }
 
-.pdf-inline-status-label {
+.note-guidance-notice-compact {
+  align-content: start;
+  padding: 0.18rem 0.05rem 0;
+}
+
+.pdf-inline-status-label,
+.note-guidance-label {
   display: inline-flex;
   width: fit-content;
   align-items: center;
@@ -1048,19 +1055,25 @@ button:disabled {
   text-transform: uppercase;
 }
 
-.pdf-viewer-fallback-line {
+.pdf-viewer-fallback-line,
+.note-guidance-line {
   color: #5b5143;
+  font-size: 0.78rem;
+  line-height: 1.3;
 }
 
-.pdf-viewer-fallback-line-title {
+.pdf-viewer-fallback-line-title,
+.note-guidance-line-title {
   font-weight: 700;
 }
 
-.pdf-viewer-fallback-line-available {
+.pdf-viewer-fallback-line-available,
+.note-guidance-line-available {
   color: #2f6a48;
 }
 
-.pdf-viewer-fallback-line-unavailable {
+.pdf-viewer-fallback-line-unavailable,
+.note-guidance-line-unavailable {
   color: #8a4a45;
 }
 

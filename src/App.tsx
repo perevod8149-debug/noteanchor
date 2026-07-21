@@ -3077,6 +3077,7 @@ function App() {
   const [pdfDocumentReadyKey, setPdfDocumentReadyKey] = useState('')
   const [pdfViewportWidth, setPdfViewportWidth] = useState(820)
   const [pdfInteractionMode, setPdfInteractionMode] = useState<'point' | 'text'>('point')
+  const pdfInteractionModeWasUserChosenRef = useRef(false)
   const [, setPdfTextTokens] = useState<PdfTextToken[]>([])
   const [pdfTextLayerStatus, setPdfTextLayerStatus] =
     useState<PdfTextLayerStatus>('pending')
@@ -3473,6 +3474,35 @@ function App() {
   const canUsePdfPointNotes = isPdfDesktopDocument && Boolean(pdfRenderedPage)
   const canUsePdfTextNotes =
     isPdfDesktopDocument && Boolean(pdfRenderedPage) && pdfTextLayerStatus === 'available'
+  const renderNoteGuidanceNotice = useCallback(
+    ({
+      action,
+      available,
+      label,
+      unavailable,
+    }: {
+      action: string
+      available: string
+      label: string
+      unavailable?: string
+    }) => (
+      <div className="note-guidance-notice">
+        <div className="note-guidance-label">{label}</div>
+        <div className="note-guidance-line note-guidance-line-available">
+          <span className="note-guidance-line-title">Available:</span>{' '}
+          <span>{available}</span>
+        </div>
+        {unavailable ? (
+          <div className="note-guidance-line note-guidance-line-unavailable">
+            <span className="note-guidance-line-title">Unavailable:</span>{' '}
+            <span>{unavailable}</span>
+          </div>
+        ) : null}
+        <div className="note-guidance-line">{action}</div>
+      </div>
+    ),
+    [],
+  )
   const pageFilteredNotesInDocumentOrder = useMemo(() => {
     if (!isPdfDesktopDocument) {
       return notesInDocumentOrder
@@ -3769,6 +3799,7 @@ function App() {
     setPdfPageCount(1)
     setPdfCurrentPage(1)
     setPdfPageInput('1')
+    pdfInteractionModeWasUserChosenRef.current = false
     setPdfInteractionMode('point')
     window.getSelection()?.removeAllRanges()
     pdfTextLayerHostRef.current?.replaceChildren()
@@ -4016,6 +4047,11 @@ function App() {
           : null
     : selectedAnchor ?? activeFindMatchAnchor
   const canAddNote = Boolean(addNoteAnchor)
+  const shouldShowTextDocumentGuidanceInHeader =
+    hasOpenDocument &&
+    !isPdfDesktopDocument &&
+    !hasValidSelection &&
+    !activeFindMatchAnchor
   const selectionSummaryText = selectionMessage
     ? selectionMessage
     : isPdfDesktopDocument
@@ -4028,7 +4064,9 @@ function App() {
         ? `Selected: "${selectedPreview}"`
         : activeFindMatchAnchor
           ? `Current match: "${activeFindMatchAnchor.selectedText}"`
-          : 'No selection'
+          : hasOpenDocument
+            ? 'Text notes available. Select a fragment or use Find to add a note.'
+            : 'No selection'
   const changedTextWarningMessage =
     statusMessages.find((status) =>
       /appears to have changed since these notes were saved/i.test(status),
@@ -4238,6 +4276,7 @@ function App() {
       setPdfTextLayerStatus('pending')
       setPdfPageTextAnalysis(null)
       setPendingPdfTextSelection(null)
+      pdfInteractionModeWasUserChosenRef.current = false
       setPdfInteractionMode('point')
       setPendingPdfPointAnchor(null)
       return
@@ -4714,14 +4753,32 @@ function App() {
   }, [currentDocument.documentId, isPdfDesktopDocument])
 
   useEffect(() => {
-    if (!isPdfDesktopDocument || pdfInteractionMode !== 'text' || canSelectPdfTextMode) {
+    if (!isPdfDesktopDocument || isPdfPreviewOnlyFallback) {
+      return
+    }
+
+    if (canSelectPdfTextMode) {
+      if (!pdfInteractionModeWasUserChosenRef.current && pdfInteractionMode !== 'text') {
+        setPdfInteractionMode('text')
+        setPendingPdfPointAnchor(null)
+        setSelectionMessage('')
+      }
+      return
+    }
+
+    if (pdfInteractionMode !== 'text') {
       return
     }
 
     setPdfInteractionMode('point')
     setPendingPdfTextSelection(null)
     setSelectionMessage('')
-  }, [canSelectPdfTextMode, isPdfDesktopDocument, pdfInteractionMode])
+  }, [
+    canSelectPdfTextMode,
+    isPdfDesktopDocument,
+    isPdfPreviewOnlyFallback,
+    pdfInteractionMode,
+  ])
 
   useEffect(() => {
     if (!pdfPendingRender || !pdfRenderedPage) {
@@ -5251,6 +5308,7 @@ function App() {
         return
       }
 
+      pdfInteractionModeWasUserChosenRef.current = true
       setPdfInteractionMode(nextMode)
       setPendingDeleteNoteId(null)
       clearTemporarySelection(true)
@@ -5276,6 +5334,7 @@ function App() {
       return
     }
 
+    pdfInteractionModeWasUserChosenRef.current = true
     setPdfInteractionMode(nextMode)
     setPendingDeleteNoteId(null)
     setPendingPdfPointAnchor(null)
@@ -9038,22 +9097,35 @@ function App() {
             </div>
           ) : null}
           <div className="header-meta-row">
-            <div
-              className={
-                hasValidSelection
-                  ? 'selection-summary'
-                  : 'selection-summary selection-summary-idle'
-              }
-              title={
-                hasValidSelection
-                  ? selectedText
-                  : activeFindMatchAnchor
-                    ? activeFindMatchAnchor.selectedText
-                    : undefined
-              }
-            >
-              {selectionSummaryText}
-            </div>
+            {shouldShowTextDocumentGuidanceInHeader ? (
+              <div className="note-guidance-notice note-guidance-notice-compact">
+                <div className="note-guidance-label">Text notes available</div>
+                <div className="note-guidance-line note-guidance-line-available">
+                  <span className="note-guidance-line-title">Available:</span>{' '}
+                  <span>Text notes.</span>
+                </div>
+                <div className="note-guidance-line">
+                  Select a fragment in the document to add a note, or use Find to locate text.
+                </div>
+              </div>
+            ) : (
+              <div
+                className={
+                  hasValidSelection
+                    ? 'selection-summary'
+                    : 'selection-summary selection-summary-idle'
+                }
+                title={
+                  hasValidSelection
+                    ? selectedText
+                    : activeFindMatchAnchor
+                      ? activeFindMatchAnchor.selectedText
+                      : undefined
+                }
+              >
+                {selectionSummaryText}
+              </div>
+            )}
             <div className="file-label" aria-label="Current file">
               <span title={currentDesktopDocumentPath || undefined}>
                 {currentDocument.fileName}
@@ -9486,34 +9558,48 @@ function App() {
                               isPdfPreviewOnlyFallback ? (
                                 previewOnlyPdfNotesMessage
                               ) : showPdfPointOnlyStatusNotice ? (
-                                <div className="pdf-inline-status-notice">
-                                  <div className="pdf-inline-status-label">Point mode selected</div>
-                                  <div className="pdf-viewer-fallback-line pdf-viewer-fallback-line-available">
-                                    <span className="pdf-viewer-fallback-line-title">Available:</span>{' '}
-                                    <span>Point notes and page/document notes.</span>
-                                  </div>
-                                  <div className="pdf-viewer-fallback-line pdf-viewer-fallback-line-unavailable">
-                                    <span className="pdf-viewer-fallback-line-title">Unavailable:</span>{' '}
-                                    <span>
-                                      {!canUsePdfTextNotes
-                                        ? 'Text notes on this page.'
-                                        : 'Text notes on this page layout.'}
-                                    </span>
-                                  </div>
-                                  <div className="pdf-viewer-fallback-line">
-                                    Click the page to place a point note, or use Add note for a page note.
-                                  </div>
-                                </div>
+                                renderNoteGuidanceNotice({
+                                  action:
+                                    'Click the page to place a point note, or use Add note for a page note.',
+                                  available: 'Point notes and page/document notes.',
+                                  label: 'Point mode selected',
+                                  unavailable: !canUsePdfTextNotes
+                                    ? 'Text notes on this page.'
+                                    : 'Text notes on this page layout.',
+                                })
                               ) : pdfInteractionMode === 'text' ? (
                                 isPdfTextPageLayoutGuarded
                                   ? experimentalPdfTextLayoutGuardMessage
                                   : isPdfTextSingleLineOnlyLayout
-                                    ? singleLineOnlyPdfTextMessage
-                                    : `PDF text-note mode: drag across one to five adjacent lines on the rendered page ${currentPdfPage}, then add one note for that fragment.`
+                                    ? renderNoteGuidanceNotice({
+                                        action:
+                                          'Text notes: drag across a single line on the rendered page. Point notes: switch to Point mode and click the page.',
+                                        available:
+                                          'Text notes (one line only), point notes, and page/document notes.',
+                                        label: 'PDF text mode selected',
+                                      })
+                                    : renderNoteGuidanceNotice({
+                                        action: `Text notes: drag across one to five adjacent lines on the rendered page ${currentPdfPage}. Point notes: switch to Point mode and click the page.`,
+                                        available:
+                                          'Text notes, point notes, and page/document notes.',
+                                        label: 'PDF text mode selected',
+                                      })
                               ) : isPdfTextSingleLineOnlyLayout ? (
-                                `Point mode selected. Text notes on this page are limited to one line. Use Point mode or Add note for longer notes.`
+                                renderNoteGuidanceNotice({
+                                  action:
+                                    'Click the page to place a point note, or switch to Text mode for one-line fragment notes.',
+                                  available:
+                                    'Point notes, one-line text notes, and page/document notes.',
+                                  label: 'Point mode selected',
+                                })
                               ) : (
-                                `Point mode selected. Click the page to place a point note, or switch to Text mode for fragment notes.`
+                                renderNoteGuidanceNotice({
+                                  action:
+                                    'Click the page to place a point note, or switch to Text mode for fragment notes.',
+                                  available:
+                                    'Point notes, text notes, and page/document notes.',
+                                  label: 'Point mode selected',
+                                })
                               )
                             ) : (
                               'PDF text notes are disabled in the production app. Use the current page field for page notes, or click the page to place a point note.'
@@ -10024,7 +10110,11 @@ function App() {
                           ? 'Only one-line text notes are available on this page layout.'
                           : 'In Text mode, drag across up to five adjacent lines on the current page to add a PDF text note. Point notes and page notes still work.'
                       : 'Select PDF text, click the current page for a point note, or use the page field for a legacy-compatible PDF page note.'
-                  : 'Select a fragment in the document to add a note.'}
+                  : renderNoteGuidanceNotice({
+                      action: 'Select a fragment in the document or use Find to add a note.',
+                      available: 'Text notes.',
+                      label: 'Text document',
+                    })}
               </div>
             )
           ) : (
