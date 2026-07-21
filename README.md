@@ -1,79 +1,57 @@
 # NoteAnchor
 
-## What it is
+NoteAnchor is a local Windows app for notes beside PDF, DOCX, and TXT documents.
 
-NoteAnchor is a local desktop app for active reading and contextual notes.
+Website: [https://noteanchor.app/](https://noteanchor.app/)
 
-It lets you select an exact word, phrase, or sentence in a document and attach a note to it. Notes stay connected to the source passage, so you can return later and still see exactly what each note refers to.
+Current release: [NoteAnchor v0.4.2](https://github.com/perevod8149-debug/noteanchor/releases/tag/v0.4.2)
 
-Original documents are not modified.
+Download:
 
-## Main features
+- [EXE installer](https://github.com/perevod8149-debug/noteanchor/releases/download/v0.4.2/NoteAnchor_0.4.2_x64-setup.exe)
+- [MSI package](https://github.com/perevod8149-debug/noteanchor/releases/download/v0.4.2/NoteAnchor_0.4.2_x64_en-US.msi)
 
-- Open TXT documents.
-- Open DOCX files as plain text.
-- Attach notes to selected words, phrases, or sentences.
-- Review all notes in one place.
-- Search within the document.
-- Whole word search.
-- Create a note from the current Find match.
-- Reconnect a note if source text changes.
-- Export notes.
-- Save a print-ready report.
-- Help button with usage guidance.
+## What It Does
 
-## Supported files
+NoteAnchor keeps long contextual notes beside the source document instead of forcing them into the page itself. Notes stay connected to selected text, a PDF page, or a supported rendered page location, while the original document remains unchanged.
 
-- TXT documents.
-- DOCX files opened as plain text.
+## Supported Document Types
 
-DOCX formatting is not preserved. DOCX images, headers, footers, footnotes, comments, tracked changes, and complex layout are not part of the current plain-text workflow. RTF, PDF, and image-based documents are not currently supported.
+- TXT notes for plain text documents.
+- DOCX notes with DOCX content opened as plain text.
+- PDF notes where the current PDF workflow can render and interpret the document reliably.
 
-## Notes and storage
+## PDF Notes And Limits
+
+- Text Notes require selectable PDF text.
+- Point Notes work for supported image-based or scanned PDFs when NoteAnchor can render the page and provide reliable page coordinates.
+- Page Notes can be used for broader PDF page comments.
+- Preview-only fallback PDFs can be viewed, but Text Notes and Point Notes are unavailable there.
+- OCR is not included.
+- PDF support is guarded and is not identical across every PDF.
+
+## Local Workflow And Privacy
+
+- Documents stay on your Windows computer.
+- Notes are saved separately beside the source file.
+- Original PDF, DOCX, and TXT files are not changed by NoteAnchor.
+- The current workflow does not require document upload.
+
+## Notes Storage
 
 Notes are saved beside the source document.
 
 - TXT example: `document.notes.json`
 - DOCX example: `document.docx.notes.json`
+- PDF example: `document.pdf.notes.json`
 
-Original source files are not changed by NoteAnchor.
+## Current Limitations
 
-## Export and print report
-
-Export notes saves a Markdown export beside the source document.
-
-- Example: `document.docx.notes-export.md`
-
-Print report saves a print-ready report beside the source document.
-
-- Example: `document.docx.notes-print.html`
-
-Print report does not print directly from NoteAnchor. The saved report can be opened in a browser and printed from there.
-
-## Current beta limitations
-
-- DOCX opens as plain text.
-- Formatting is not preserved.
-- Very large documents may be slower.
-- RTF is not currently supported.
-- PDF and image-based documents are not currently supported.
-- Word comments and tracked changes are not currently supported.
-
-## App identity
-
-- App name: NoteAnchor
-- Version: 0.4.0
-- Tauri identifier: com.noteanchor.desktop
-
-## Installer and executable
-
-Installer:
-
-`C:\Users\Andrew\Documents\Codex\2026-06-09-note-anchor-prototype\src-tauri\target\release\bundle\nsis\NoteAnchor_0.4.0_x64-setup.exe`
-
-Standalone executable:
-
-`C:\Users\Andrew\Documents\Codex\2026-06-09-note-anchor-prototype\src-tauri\target\release\noteanchor.exe`
+- DOCX formatting is not preserved.
+- Some PDFs remain limited or preview-only.
+- Text Notes require usable text selection or rendered text support.
+- Point Notes require a supported rendered PDF page.
+- The current Windows release is not code-signed yet, so Windows SmartScreen may appear.
 
 ## Development
 
@@ -85,28 +63,12 @@ Run the desktop app in development mode:
 
 ```powershell
 cd C:\Users\Andrew\Documents\Codex\2026-06-09-note-anchor-prototype
-$env:Path = "C:\Users\Andrew\Tools\node\node-v24.15.0-win-x64;" + $env:Path
-npm.cmd run tauri:dev
+npm run tauri:dev
 ```
 
-Build:
+Build checks:
 
 ```powershell
-cd C:\Users\Andrew\Documents\Codex\2026-06-09-note-anchor-prototype
-$env:Path = "C:\Users\Andrew\Tools\node\node-v24.15.0-win-x64;" + $env:Path
-npm.cmd run build
-npm.cmd run tauri:build
+npm run build
+cargo check -q --manifest-path src-tauri\Cargo.toml
 ```
-
-If the executable is locked:
-
-```powershell
-taskkill /IM noteanchor.exe /F
-```
-
-## Related documents
-
-- `PRODUCT_POSITIONING.md`
-- `BETA_PAGE_DRAFT.md`
-- `LANDING_PAGE.md`
-- `RELEASE_NOTES_0.4.0.md`
