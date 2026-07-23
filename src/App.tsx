@@ -14,7 +14,7 @@ import type {
   ReactNode,
   SetStateAction,
 } from 'react'
-import { getDocument, GlobalWorkerOptions, Util } from 'pdfjs-dist'
+import { getDocument, GlobalWorkerOptions, OPS, Util } from 'pdfjs-dist'
 import type {
   PDFDocumentProxy,
   PDFPageProxy,
@@ -315,6 +315,89 @@ type PdfStickyDiagnosticState = {
   workspaceScrollTop: number
 }
 
+type PdfRenderProbeClassification =
+  | 'render-success'
+  | 'render-cancelled-or-stale'
+  | 'page-load-failed'
+  | 'canvas-render-failed'
+  | 'blank-canvas-false-positive-avoided'
+  | 'valid-blank-page'
+  | 'blank-canvas-suspected'
+  | 'blank-canvas-after-delay-retry'
+  | 'blank-canvas-after-page-reacquire'
+  | 'blank-canvas-after-scale-retry'
+  | 'retry-recovered'
+  | 'fallback-selected'
+
+type PdfCanvasBlankProbeResult = {
+  brightestSample: number
+  darkestSample: number
+  isProbablyBlank: boolean
+  luminanceRange: number
+  nonWhiteRatio: number
+  nonWhiteSampleCount: number
+  regionsWithContent: number
+  sampledRegionCount: number
+  visibleSampleCount: number
+}
+
+type PdfRenderProbeAttemptSummary = {
+  brightestSample: number
+  darkestSample: number
+  genericOperatorCount: number
+  hasGenericPaintOperatorEvidence: boolean
+  hasImageOperatorEvidence: boolean
+  hasRenderableTextItems: boolean
+  hasTextOperatorEvidence: boolean
+  imageLikeOperatorCount: number
+  strongTextEvidence: boolean
+  strongVisibleContentEvidence: boolean
+  textOperatorOnly: boolean
+  textLikeOperatorCount: number
+  isProbablyBlank: boolean
+  label: string
+  luminanceRange: number
+  nonWhiteRatio: number
+  nonWhiteSampleCount: number
+  operatorCount: number
+  renderDecisionReason: string
+  resourceOrDependencyEvidence: boolean
+  resourceOrDependencyOperatorCount: number
+  sparseValidPageAllowed: boolean
+  sparseValidPageDeniedReason: string
+  regionsWithContent: number
+  sampledRegionCount: number
+  sparseValidPageFailedConditions: string[]
+  sparseValidPageMatched: boolean
+  textLayerStatus: PdfTextLayerStatus
+  tokenCount: number
+  unknownOperatorCount: number
+  visibleSampleCount: number
+}
+
+type PdfRenderProbeDiagnosticState = {
+  attemptStages: PdfRenderProbeClassification[]
+  blankProbeResults: Array<{
+    brightestSample: number
+    darkestSample: number
+    isProbablyBlank: boolean
+    label: string
+    luminanceRange: number
+    nonWhiteRatio: number
+    nonWhiteSampleCount: number
+    regionsWithContent: number
+    sampledRegionCount: number
+    visibleSampleCount: number
+  }>
+  fallbackSelected: boolean
+  filePath: string
+  finalClassification: PdfRenderProbeClassification | ''
+  lastAttempt: PdfRenderProbeAttemptSummary | null
+  pageNumber: number | null
+  recoveredAfterRetry: boolean
+  sessionKey: number | null
+}
+
 const initialPdfRecoveryDiagnosticState: PdfRecoveryDiagnosticState = {
   dialogAccepted: null,
   recoveredLegacyPdfTextNotesCount: 0,
@@ -342,6 +425,58 @@ const initialPdfSelectionDiagnosticState: PdfSelectionDiagnosticState = {
   startRequested: false,
   startTokenFound: false,
 }
+
+const initialPdfRenderProbeDiagnosticState: PdfRenderProbeDiagnosticState = {
+  attemptStages: [],
+  blankProbeResults: [],
+  fallbackSelected: false,
+  filePath: '',
+  finalClassification: '',
+  lastAttempt: null,
+  pageNumber: null,
+  recoveredAfterRetry: false,
+  sessionKey: null,
+}
+
+const PDF_TEXT_OPERATOR_IDS = new Set<number>([
+  OPS.showText,
+  OPS.showSpacedText,
+  OPS.nextLineShowText,
+  OPS.nextLineSetSpacingShowText,
+])
+
+const PDF_IMAGE_OPERATOR_IDS = new Set<number>([
+  OPS.paintImageXObject,
+  OPS.paintImageXObjectRepeat,
+  OPS.paintInlineImageXObject,
+  OPS.paintInlineImageXObjectGroup,
+  OPS.paintImageMaskXObject,
+  OPS.paintImageMaskXObjectGroup,
+  OPS.paintImageMaskXObjectRepeat,
+  OPS.paintSolidColorImageMask,
+])
+
+const PDF_RESOURCE_OR_DEPENDENCY_OPERATOR_IDS = new Set<number>([
+  OPS.dependency,
+  OPS.paintXObject,
+  OPS.paintFormXObjectBegin,
+  OPS.paintFormXObjectEnd,
+  OPS.beginInlineImage,
+  OPS.beginImageData,
+  OPS.endInlineImage,
+])
+
+const PDF_GENERIC_PAINT_OPERATOR_IDS = new Set<number>([
+  OPS.fill,
+  OPS.eoFill,
+  OPS.stroke,
+  OPS.fillStroke,
+  OPS.eoFillStroke,
+  OPS.closeStroke,
+  OPS.closeFillStroke,
+  OPS.closeEOFillStroke,
+  OPS.shadingFill,
+])
 
 type DesktopVisibleSaveStatus = {
   message: 'Saving...' | 'Saved'
@@ -984,33 +1119,94 @@ const isRenderedPdfCanvasEffectivelyBlank = (
   const context = canvas.getContext('2d', { willReadFrequently: true })
 
   if (!context || canvas.width <= 0 || canvas.height <= 0) {
-    return false
+    return {
+      brightestSample: 255,
+      darkestSample: 255,
+      isProbablyBlank: false,
+      luminanceRange: 0,
+      nonWhiteRatio: 0,
+      nonWhiteSampleCount: 0,
+      regionsWithContent: 0,
+      sampledRegionCount: 0,
+      visibleSampleCount: 0,
+    } satisfies PdfCanvasBlankProbeResult
   }
 
   const { width, height } = canvas
   const imageData = context.getImageData(0, 0, width, height).data
+  const regionColumns = 3
+  const regionRows = 3
+  const regionContent = new Array(regionColumns * regionRows).fill(false)
+  let brightestSample = 0
+  let darkestSample = 255
   let visibleSampleCount = 0
   let nonWhiteSampleCount = 0
 
-  for (let y = 0; y < height; y += sampleStep) {
-    for (let x = 0; x < width; x += sampleStep) {
-      const index = (y * width + x) * 4
-      const red = imageData[index]
-      const green = imageData[index + 1]
-      const blue = imageData[index + 2]
-      const alpha = imageData[index + 3]
+  const regionWidth = Math.max(1, width / regionColumns)
+  const regionHeight = Math.max(1, height / regionRows)
+  const derivedSampleStep = Math.max(
+    10,
+    Math.min(sampleStep, Math.floor(Math.max(width, height) / 36) || sampleStep),
+  )
+  const sampleOffsets = [0, Math.max(1, Math.floor(derivedSampleStep / 2))]
 
-      if (alpha > 8) {
-        visibleSampleCount += 1
+  for (const offsetY of sampleOffsets) {
+    for (const offsetX of sampleOffsets) {
+      for (let y = offsetY; y < height; y += derivedSampleStep) {
+        for (let x = offsetX; x < width; x += derivedSampleStep) {
+          const index = (y * width + x) * 4
+          const red = imageData[index]
+          const green = imageData[index + 1]
+          const blue = imageData[index + 2]
+          const alpha = imageData[index + 3]
 
-        if (red < 247 || green < 247 || blue < 247) {
-          nonWhiteSampleCount += 1
+          if (alpha > 8) {
+            visibleSampleCount += 1
+            const luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+            brightestSample = Math.max(brightestSample, luminance)
+            darkestSample = Math.min(darkestSample, luminance)
+
+            if (red < 249 || green < 249 || blue < 249) {
+              nonWhiteSampleCount += 1
+              const regionColumn = Math.min(regionColumns - 1, Math.floor(x / regionWidth))
+              const regionRow = Math.min(regionRows - 1, Math.floor(y / regionHeight))
+              regionContent[regionRow * regionColumns + regionColumn] = true
+            }
+          }
         }
       }
     }
   }
 
-  return visibleSampleCount === 0 || nonWhiteSampleCount === 0
+  const sampledRegionCount = regionContent.length
+  const regionsWithContent = regionContent.filter(Boolean).length
+  const nonWhiteRatio =
+    visibleSampleCount > 0 ? nonWhiteSampleCount / visibleSampleCount : 0
+  const luminanceRange =
+    visibleSampleCount > 0 ? brightestSample - darkestSample : 0
+  const isUniformWhite =
+    visibleSampleCount > 0 &&
+    nonWhiteSampleCount === 0 &&
+    darkestSample >= 250 &&
+    luminanceRange <= 3
+  const isSparseRealContent =
+    nonWhiteSampleCount > 0 &&
+    (regionsWithContent > 0 || darkestSample < 244 || luminanceRange > 7 || nonWhiteRatio >= 0.00045)
+
+  return {
+    brightestSample,
+    darkestSample,
+    isProbablyBlank:
+      visibleSampleCount === 0 ||
+      (isUniformWhite && !isSparseRealContent) ||
+      (nonWhiteSampleCount === 0 && luminanceRange <= 2),
+    luminanceRange,
+    nonWhiteRatio,
+    nonWhiteSampleCount,
+    regionsWithContent,
+    sampledRegionCount,
+    visibleSampleCount,
+  } satisfies PdfCanvasBlankProbeResult
 }
 
 const filterNotesByQuery = (
@@ -3116,7 +3312,6 @@ function App() {
   const [documentSearchText, setDocumentSearchText] = useState('')
   const [activeFindMatchIndex, setActiveFindMatchIndex] = useState<number>(-1)
   const [noteDraft, setNoteDraft] = useState('')
-  const [bridgeStatus, setBridgeStatus] = useState('')
   const [desktopOpenStatus, setDesktopOpenStatus] = useState('')
   const [desktopNotesStatus, setDesktopNotesStatus] = useState('')
   const [desktopVisibleSaveStatus, setDesktopVisibleSaveStatus] =
@@ -3137,6 +3332,9 @@ function App() {
   const [initialPdfSelectionDiagnosticForRef] = useState<PdfSelectionDiagnosticState>(
     initialPdfSelectionDiagnosticState,
   )
+  const [initialPdfRenderProbeDiagnosticForRef] = useState<PdfRenderProbeDiagnosticState>(
+    initialPdfRenderProbeDiagnosticState,
+  )
   const pdfRecoveryDiagnosticRef = useRef<PdfRecoveryDiagnosticState>(
     initialPdfRecoveryDiagnosticForRef,
   )
@@ -3148,6 +3346,9 @@ function App() {
   )
   const pdfSelectionDiagnosticRef = useRef<PdfSelectionDiagnosticState>(
     initialPdfSelectionDiagnosticForRef,
+  )
+  const pdfRenderProbeDiagnosticRef = useRef<PdfRenderProbeDiagnosticState>(
+    initialPdfRenderProbeDiagnosticForRef,
   )
   const pdfPageTextAnalysisCacheRef = useRef<Map<string, PdfPageTextAnalysisCacheEntry>>(
     new Map(),
@@ -3292,7 +3493,6 @@ function App() {
   const pdfStickyDiagnosticRef = useRef<PdfStickyDiagnosticState>(
     initialPdfStickyDiagnosticForRef,
   )
-  const [isBridgePending, setIsBridgePending] = useState(false)
   const [isDesktopOpenPending, setIsDesktopOpenPending] = useState(false)
   const [isDraggingEditor, setIsDraggingEditor] = useState(false)
   const [modalPosition, setModalPosition] = useState<ModalPosition | null>(null)
@@ -3357,6 +3557,18 @@ function App() {
             pdfStickyDiagnosticRef.current,
           )
         : value
+  }
+
+  const setPdfRenderProbeDiagnostic = (value: SetStateAction<PdfRenderProbeDiagnosticState>) => {
+    const nextValue =
+      typeof value === 'function'
+        ? (value as (current: PdfRenderProbeDiagnosticState) => PdfRenderProbeDiagnosticState)(
+            pdfRenderProbeDiagnosticRef.current,
+          )
+        : value
+
+    pdfRenderProbeDiagnosticRef.current = nextValue
+
   }
 
   const selectedPreview = useMemo(() => {
@@ -3470,10 +3682,14 @@ function App() {
       ? `${pdfViewerSrc}#page=${currentPdfPage}`
       : pdfViewerSrc
   const isPdfPreviewOnlyFallback =
-    isPdfDesktopDocument && Boolean(pdfRenderError && pdfViewerSrc && !pdfRenderedPage)
-  const canUsePdfPointNotes = isPdfDesktopDocument && Boolean(pdfRenderedPage)
+    isPdfDesktopDocument && Boolean(pdfRenderError && pdfViewerSrc)
+  const canUsePdfPointNotes =
+    isPdfDesktopDocument && Boolean(pdfRenderedPage) && !isPdfPreviewOnlyFallback
   const canUsePdfTextNotes =
-    isPdfDesktopDocument && Boolean(pdfRenderedPage) && pdfTextLayerStatus === 'available'
+    isPdfDesktopDocument &&
+    Boolean(pdfRenderedPage) &&
+    pdfTextLayerStatus === 'available' &&
+    !isPdfPreviewOnlyFallback
   const renderNoteGuidanceNotice = useCallback(
     ({
       action,
@@ -3569,7 +3785,6 @@ function App() {
   const statusMessages = [
     desktopOpenStatus,
     effectiveDesktopNotesStatusLabel,
-    bridgeStatus,
   ].filter(Boolean)
   const headerStatusMessage = statusMessages[statusMessages.length - 1] ?? ''
   const isHeaderStatusError = isAlertStatusMessage(headerStatusMessage)
@@ -4222,6 +4437,7 @@ function App() {
         startTokenFound: false,
       })
       setPdfStickyDiagnostic(initialPdfStickyDiagnosticState)
+      setPdfRenderProbeDiagnostic(initialPdfRenderProbeDiagnosticState)
       setPdfBlobUrl('')
       return
     }
@@ -4804,7 +5020,8 @@ function App() {
     let cancelled = false
     const renderRequestId = ++pdfRenderRequestIdRef.current
     const targetFilePath = normalizeDesktopFilePath(pdfPendingRender.filePath)
-    let renderTask: ReturnType<PDFPageProxy['render']> | null = null
+    let activeRenderTask: ReturnType<PDFPageProxy['render']> | null = null
+    let activeTextLayerBuilder: TextLayerBuilder | null = null
     const isStaleRenderRequest = () =>
       cancelled ||
       renderRequestId !== pdfRenderRequestIdRef.current ||
@@ -4812,158 +5029,775 @@ function App() {
       currentPdfOpenSessionKeyRef.current !== pdfPendingRender.sessionKey ||
       currentPdfPageRef.current !== pdfPendingRender.pageNumber
 
-    // Keep the pdf.js text layer for future isolated research, but production
-    // PDF notes no longer use DOM text-layer hit-testing for text-note creation.
-    const textLayerBuilder = new TextLayerBuilder({
-      onAppend: (div: HTMLDivElement) => {
-        if (isStaleRenderRequest()) {
-          return
-        }
-        textLayerHost.replaceChildren(div)
-      },
-      pdfPage: pdfPendingRender.page,
-    })
+    const finalizePdfRenderProbeDiagnostic = (
+      classification: PdfRenderProbeClassification,
+      options?: { fallbackSelected?: boolean; recoveredAfterRetry?: boolean },
+    ) => {
+      const nextDiagnostic = {
+        ...pdfRenderProbeDiagnosticRef.current,
+        fallbackSelected: options?.fallbackSelected ?? pdfRenderProbeDiagnosticRef.current.fallbackSelected,
+        finalClassification: classification,
+        recoveredAfterRetry:
+          options?.recoveredAfterRetry ?? pdfRenderProbeDiagnosticRef.current.recoveredAfterRetry,
+      }
 
-    const renderPageToCanvas = async () => {
+      setPdfRenderProbeDiagnostic(nextDiagnostic)
+
+      if (import.meta.env.DEV) {
+        console.info('[NoteAnchor PDF] render probe:', nextDiagnostic)
+      }
+    }
+
+    const appendPdfRenderProbeStage = (classification: PdfRenderProbeClassification) => {
+      setPdfRenderProbeDiagnostic((current) => ({
+        ...current,
+        attemptStages:
+          current.attemptStages[current.attemptStages.length - 1] === classification
+            ? current.attemptStages
+            : [...current.attemptStages, classification],
+      }))
+    }
+
+    const appendPdfBlankProbeResult = (
+      label: string,
+      result: PdfCanvasBlankProbeResult,
+    ) => {
+      setPdfRenderProbeDiagnostic((current) => ({
+        ...current,
+        blankProbeResults: [
+          ...current.blankProbeResults,
+          {
+            brightestSample: result.brightestSample,
+            darkestSample: result.darkestSample,
+            isProbablyBlank: result.isProbablyBlank,
+            label,
+            luminanceRange: result.luminanceRange,
+            nonWhiteRatio: result.nonWhiteRatio,
+            nonWhiteSampleCount: result.nonWhiteSampleCount,
+            regionsWithContent: result.regionsWithContent,
+            sampledRegionCount: result.sampledRegionCount,
+            visibleSampleCount: result.visibleSampleCount,
+          },
+        ],
+      }))
+    }
+
+    const createRenderProbeError = (
+      classification: PdfRenderProbeClassification,
+      message: string,
+    ) =>
+      Object.assign(new Error(message), {
+        pdfRenderProbeClassification: classification,
+      })
+
+    const waitForBlankCanvasRetryDelay = (delayMs: number) =>
+      new Promise<void>((resolve) => {
+        window.setTimeout(resolve, delayMs)
+      })
+
+    const getAlternatePdfRetryScale = (currentScale: number) => {
+      const boundedCurrentScale = Math.max(0.68, Math.min(1.85, currentScale))
+      const candidates = [
+        Math.max(0.68, Math.min(1.85, boundedCurrentScale * 0.92)),
+        Math.max(0.68, Math.min(1.85, boundedCurrentScale * 1.08)),
+      ]
+
+      return candidates.reduce((best, candidate) => {
+        if (Math.abs(candidate - boundedCurrentScale) < 0.015) {
+          return best
+        }
+
+        if (best === null) {
+          return candidate
+        }
+
+        return Math.abs(candidate - boundedCurrentScale) > Math.abs(best - boundedCurrentScale)
+          ? candidate
+          : best
+      }, null as number | null)
+    }
+
+    const getCachedPdfDocumentForRender = () => {
+      const cachedPdfDocument = pdfDocumentProxyRef.current
+      const cachedPdfDocumentIdentity = pdfDocumentIdentityRef.current
+
+      if (
+        !cachedPdfDocument ||
+        !cachedPdfDocumentIdentity ||
+        cachedPdfDocumentIdentity.filePath !== targetFilePath ||
+        cachedPdfDocumentIdentity.sessionKey !== pdfPendingRender.sessionKey
+      ) {
+        return null
+      }
+
+      return cachedPdfDocument
+    }
+
+    const renderPdfCanvasAttempt = async (
+      page: PDFPageProxy,
+      viewport: ReturnType<PDFPageProxy['getViewport']>,
+      blankProbeLabel: string,
+    ) => {
+      const context = canvas.getContext('2d', { willReadFrequently: true })
+
+      if (!context) {
+        throw createRenderProbeError(
+          'canvas-render-failed',
+          'Could not create a 2D canvas context for PDF rendering.',
+        )
+      }
+
+      canvas.width = Math.ceil(viewport.width)
+      canvas.height = Math.ceil(viewport.height)
+      canvas.style.width = `${Math.ceil(viewport.width)}px`
+      canvas.style.height = `${Math.ceil(viewport.height)}px`
+      textLayerHost.replaceChildren()
+
+      const textLayerBuilder = new TextLayerBuilder({
+        onAppend: (div: HTMLDivElement) => {
+          if (isStaleRenderRequest()) {
+            return
+          }
+          textLayerHost.replaceChildren(div)
+        },
+        pdfPage: page,
+      })
+
+      activeTextLayerBuilder = textLayerBuilder
+      activeRenderTask = page.render({
+        canvas,
+        viewport,
+      })
+
       try {
-        const context = canvas.getContext('2d')
-
-        if (!context) {
-          throw new Error('Could not create a 2D canvas context for PDF rendering.')
+        await activeRenderTask.promise
+      } catch (error) {
+        if (isStaleRenderRequest()) {
+          throw createRenderProbeError(
+            'render-cancelled-or-stale',
+            'Cancelled stale PDF canvas render.',
+          )
         }
 
-        canvas.width = Math.ceil(pdfPendingRender.viewport.width)
-        canvas.height = Math.ceil(pdfPendingRender.viewport.height)
-        canvas.style.width = `${Math.ceil(pdfPendingRender.viewport.width)}px`
-        canvas.style.height = `${Math.ceil(pdfPendingRender.viewport.height)}px`
-        textLayerHost.replaceChildren()
+        throw createRenderProbeError(
+          'canvas-render-failed',
+          error instanceof Error ? error.message : 'Unknown canvas render error.',
+        )
+      }
 
-        renderTask = pdfPendingRender.page.render({
-          canvas,
-          viewport: pdfPendingRender.viewport,
+      if (isStaleRenderRequest()) {
+        throw createRenderProbeError(
+          'render-cancelled-or-stale',
+          'Cancelled stale PDF canvas render.',
+        )
+      }
+
+      const pageTextAnalysisCacheKey = buildPdfPageTextAnalysisCacheKey(
+        pdfPendingRender.filePath,
+        pdfPendingRender.sessionKey,
+        pdfPendingRender.pageNumber,
+        viewport.width,
+        viewport.height,
+      )
+      const cachedPageTextAnalysis =
+        pdfPageTextAnalysisCacheRef.current.get(pageTextAnalysisCacheKey) ?? null
+      let textContentItems: Array<TextItem | TextMarkedContent> = []
+      let nextPageTextAnalysis: PdfPageTextAnalysisCacheEntry | null = null
+
+      try {
+        await textLayerBuilder.render({
+          images: null as never,
+          viewport,
         })
 
-        await renderTask.promise
+        if (cachedPageTextAnalysis) {
+          nextPageTextAnalysis = cachedPageTextAnalysis
+        } else {
+          const textContent = await page.getTextContent({
+            disableNormalization: true,
+            includeMarkedContent: true,
+          })
+          textContentItems = textContent.items
+        }
+      } catch (textLayerError) {
+        console.warn('[NoteAnchor PDF] text layer unavailable for rendered page:', textLayerError)
+      }
 
-        if (isStaleRenderRequest()) {
-          return
+      if (isStaleRenderRequest()) {
+        throw createRenderProbeError(
+          'render-cancelled-or-stale',
+          'Cancelled stale PDF canvas render.',
+        )
+      }
+
+      if (!nextPageTextAnalysis) {
+        const hasRenderableTextItems = textContentItems.some(isRenderablePdfTextItem)
+        const nextTokens: PdfTextToken[] = []
+
+        if (ENABLE_EXPERIMENTAL_PDF_TEXT_NOTES && hasRenderableTextItems) {
+          const itemGeometries = textContentItems
+            .filter(isRenderablePdfTextItem)
+            .map((item, itemIndex) =>
+              computePdfTextItemGeometry(item, viewport, itemIndex, pdfPendingRender.pageNumber),
+            )
+            .filter((item): item is PdfTextItemGeometry => item !== null)
+          let tokenIndex = 0
+
+          itemGeometries.forEach((itemGeometry) => {
+            const itemTokens = computePdfTextTokens(itemGeometry, tokenIndex)
+            nextTokens.push(...itemTokens)
+            tokenIndex += itemTokens.length
+          })
         }
 
-        const pageTextAnalysisCacheKey = buildPdfPageTextAnalysisCacheKey(
-          pdfPendingRender.filePath,
-          pdfPendingRender.sessionKey,
-          pdfPendingRender.pageNumber,
-          pdfPendingRender.viewport.width,
-          pdfPendingRender.viewport.height,
-        )
-        const cachedPageTextAnalysis =
-          pdfPageTextAnalysisCacheRef.current.get(pageTextAnalysisCacheKey) ?? null
-        let textContentItems: Array<TextItem | TextMarkedContent> = []
-        let nextPageTextAnalysis: PdfPageTextAnalysisCacheEntry | null = null
+        nextPageTextAnalysis = {
+          cacheKey: pageTextAnalysisCacheKey,
+          pageNumber: pdfPendingRender.pageNumber,
+          textLayerStatus:
+            ENABLE_EXPERIMENTAL_PDF_TEXT_NOTES && nextTokens.length > 0
+              ? 'available'
+              : 'empty',
+          tokens: nextTokens,
+          ...computePdfPageTextAnalysis(
+            nextTokens,
+            viewport.width,
+            hasRenderableTextItems,
+          ),
+        }
+        pdfPageTextAnalysisCacheRef.current.set(pageTextAnalysisCacheKey, nextPageTextAnalysis)
+      }
 
+      const blankProbe = isRenderedPdfCanvasEffectivelyBlank(canvas)
+      appendPdfBlankProbeResult(blankProbeLabel, blankProbe)
+      let operatorCount = 0
+      let unknownOperatorCount = 0
+      let imageLikeOperatorCount = 0
+      let textLikeOperatorCount = 0
+      let genericOperatorCount = 0
+      let resourceOrDependencyOperatorCount = 0
+      let hasTextOperatorEvidence = false
+      let hasImageOperatorEvidence = false
+      let hasGenericPaintOperatorEvidence = false
+      let resourceOrDependencyEvidence = false
+
+      if (blankProbe.isProbablyBlank) {
         try {
-          await textLayerBuilder.render({
-            images: null as never,
-            viewport: pdfPendingRender.viewport,
+          const operatorList = await page.getOperatorList()
+          operatorCount = operatorList.fnArray.length
+
+          operatorList.fnArray.forEach((fnId) => {
+            if (PDF_TEXT_OPERATOR_IDS.has(fnId)) {
+              textLikeOperatorCount += 1
+              return
+            }
+
+            if (PDF_IMAGE_OPERATOR_IDS.has(fnId)) {
+              imageLikeOperatorCount += 1
+              return
+            }
+
+            if (PDF_RESOURCE_OR_DEPENDENCY_OPERATOR_IDS.has(fnId)) {
+              resourceOrDependencyOperatorCount += 1
+              return
+            }
+
+            if (PDF_GENERIC_PAINT_OPERATOR_IDS.has(fnId)) {
+              genericOperatorCount += 1
+              return
+            }
+
+            genericOperatorCount += 1
           })
 
-          if (cachedPageTextAnalysis) {
-            nextPageTextAnalysis = cachedPageTextAnalysis
-          } else {
-            const textContent = await pdfPendingRender.page.getTextContent({
-              disableNormalization: true,
-              includeMarkedContent: true,
-            })
-            textContentItems = textContent.items
-          }
-        } catch (textLayerError) {
-          console.warn('[NoteAnchor PDF] text layer unavailable for rendered page:', textLayerError)
+          unknownOperatorCount = operatorList.fnArray.reduce(
+            (count, fnId) => (Object.values(OPS).includes(fnId) ? count : count + 1),
+            0,
+          )
+          hasTextOperatorEvidence = textLikeOperatorCount > 0
+          hasImageOperatorEvidence = imageLikeOperatorCount > 0
+          hasGenericPaintOperatorEvidence = genericOperatorCount > 0
+          resourceOrDependencyEvidence = resourceOrDependencyOperatorCount > 0
+        } catch (operatorListError) {
+          console.warn(
+            '[NoteAnchor PDF] operator list unavailable for blank-page probe:',
+            operatorListError,
+          )
         }
+      }
 
-        if (isStaleRenderRequest()) {
+      const sparseValidPageGuard = evaluateSparseValidPageGuard({
+        blankProbe,
+        pageTextAnalysis: nextPageTextAnalysis,
+      })
+      const strongTextEvidence = getStrongTextEvidence(nextPageTextAnalysis)
+      const strongVisibleContentEvidence = strongTextEvidence || hasImageOperatorEvidence
+      const hasSuspiciousResourceComplexity = resourceOrDependencyOperatorCount > 1
+      const safeSparseValidPageAllowed =
+        sparseValidPageGuard.matched &&
+        !hasImageOperatorEvidence &&
+        !hasSuspiciousResourceComplexity
+      const validBlankPageDeniedReason = [
+        hasImageOperatorEvidence ? 'imageLikeOperatorCount>0' : '',
+        hasSuspiciousResourceComplexity
+          ? `resourceOrDependencyOperatorCount>${1}`
+          : '',
+        strongTextEvidence ? 'strongTextEvidence=true' : '',
+        sparseValidPageGuard.matched ? 'sparseValidPageGuardMatched=true' : '',
+      ]
+        .filter(Boolean)
+        .join(', ')
+      const validBlankPageAllowed =
+        blankProbe.isProbablyBlank &&
+        !hasImageOperatorEvidence &&
+        !hasSuspiciousResourceComplexity &&
+        !strongTextEvidence &&
+        !sparseValidPageGuard.matched
+      const textOperatorOnly =
+        hasTextOperatorEvidence &&
+        !strongTextEvidence &&
+        !hasImageOperatorEvidence &&
+        !hasGenericPaintOperatorEvidence &&
+        !hasSuspiciousResourceComplexity
+
+      setPdfRenderProbeDiagnostic((current) => ({
+        ...current,
+        lastAttempt: {
+          brightestSample: blankProbe.brightestSample,
+          darkestSample: blankProbe.darkestSample,
+          genericOperatorCount,
+          hasGenericPaintOperatorEvidence,
+          hasImageOperatorEvidence,
+          hasRenderableTextItems: nextPageTextAnalysis.hasRenderableTextItems,
+          hasTextOperatorEvidence,
+          imageLikeOperatorCount,
+          strongTextEvidence,
+          strongVisibleContentEvidence,
+          textOperatorOnly,
+          textLikeOperatorCount,
+          isProbablyBlank: blankProbe.isProbablyBlank,
+          label: blankProbeLabel,
+          luminanceRange: blankProbe.luminanceRange,
+          nonWhiteRatio: blankProbe.nonWhiteRatio,
+          nonWhiteSampleCount: blankProbe.nonWhiteSampleCount,
+          operatorCount,
+          renderDecisionReason: '',
+          resourceOrDependencyEvidence,
+          resourceOrDependencyOperatorCount,
+          regionsWithContent: blankProbe.regionsWithContent,
+          sampledRegionCount: blankProbe.sampledRegionCount,
+          sparseValidPageAllowed: validBlankPageAllowed,
+          sparseValidPageDeniedReason: validBlankPageDeniedReason || 'none',
+          sparseValidPageFailedConditions: sparseValidPageGuard.failedConditions,
+          sparseValidPageMatched: sparseValidPageGuard.matched,
+          textLayerStatus: nextPageTextAnalysis.textLayerStatus,
+          tokenCount: nextPageTextAnalysis.tokens.length,
+          unknownOperatorCount,
+          visibleSampleCount: blankProbe.visibleSampleCount,
+        },
+      }))
+
+      return {
+        blankProbe,
+        hasGenericPaintOperatorEvidence,
+        hasImageOperatorEvidence,
+        hasTextOperatorEvidence,
+        imageLikeOperatorCount,
+        operatorCount,
+        resourceOrDependencyEvidence,
+        resourceOrDependencyOperatorCount,
+        safeSparseValidPageAllowed,
+        sparseValidPageMatched: sparseValidPageGuard.matched,
+        strongTextEvidence,
+        strongVisibleContentEvidence,
+        textOperatorOnly,
+        validBlankPageAllowed,
+        validBlankPageDeniedReason,
+        page,
+        pageTextAnalysis: nextPageTextAnalysis,
+        textLikeOperatorCount,
+        unknownOperatorCount,
+        viewport,
+      }
+    }
+
+    const applyPdfRenderAttemptResult = ({
+      pageTextAnalysis,
+    }: {
+      pageTextAnalysis: PdfPageTextAnalysisCacheEntry
+    }) => {
+      if (ENABLE_EXPERIMENTAL_PDF_TEXT_NOTES) {
+        if (!isStaleRenderRequest()) {
+          setPdfTextTokens(pageTextAnalysis.tokens)
+          setPdfTextLayerStatus(pageTextAnalysis.textLayerStatus)
+          setPdfPageTextAnalysis(pageTextAnalysis)
+        }
+      } else if (!isStaleRenderRequest()) {
+        setPdfTextTokens([])
+        setPdfTextLayerStatus('empty')
+        setPdfPageTextAnalysis(null)
+      }
+    }
+
+    const evaluateSparseValidPageGuard = ({
+      blankProbe,
+      pageTextAnalysis,
+    }: {
+      blankProbe: PdfCanvasBlankProbeResult
+      pageTextAnalysis: PdfPageTextAnalysisCacheEntry
+    }) => {
+      const tokenCount = pageTextAnalysis.tokens.length
+      const hasEarlyTextEvidence = pageTextAnalysis.hasRenderableTextItems
+      const hasSparseTextTokens = tokenCount > 0 && tokenCount <= 18
+      const failedConditions: string[] = []
+
+      if (!blankProbe.isProbablyBlank) {
+        failedConditions.push('blankProbe.isProbablyBlank=false')
+      }
+
+      if (blankProbe.visibleSampleCount <= 0) {
+        failedConditions.push('visibleSampleCount<=0')
+      }
+
+      if (blankProbe.nonWhiteSampleCount !== 0) {
+        failedConditions.push('nonWhiteSampleCount!==0')
+      }
+
+      if (blankProbe.luminanceRange > 3) {
+        failedConditions.push('luminanceRange>3')
+      }
+
+      if (!hasEarlyTextEvidence) {
+        failedConditions.push('hasRenderableTextItems=false')
+      }
+
+      if (!hasSparseTextTokens && pageTextAnalysis.textLayerStatus !== 'available') {
+        failedConditions.push('no sparse tokens and textLayerStatus!==available')
+      }
+
+      return {
+        failedConditions,
+        matched: failedConditions.length === 0,
+      }
+    }
+
+    const getStrongTextEvidence = (pageTextAnalysis: PdfPageTextAnalysisCacheEntry) =>
+      pageTextAnalysis.hasRenderableTextItems ||
+      pageTextAnalysis.tokens.length > 0 ||
+      pageTextAnalysis.textLayerStatus === 'available'
+
+    const shouldTreatBlankCanvasAsRenderFailure = ({
+      blankProbe,
+      hasImageOperatorEvidence,
+      safeSparseValidPageAllowed,
+      resourceOrDependencyOperatorCount,
+      strongTextEvidence,
+    }: {
+      blankProbe: PdfCanvasBlankProbeResult
+      hasImageOperatorEvidence: boolean
+      safeSparseValidPageAllowed: boolean
+      resourceOrDependencyOperatorCount: number
+      strongTextEvidence: boolean
+    }) =>
+      blankProbe.isProbablyBlank &&
+      (strongTextEvidence ||
+        hasImageOperatorEvidence ||
+        resourceOrDependencyOperatorCount > 1) &&
+      !safeSparseValidPageAllowed
+
+    const renderPageToCanvas = async () => {
+      setPdfRenderProbeDiagnostic({
+        ...initialPdfRenderProbeDiagnosticState,
+        filePath: pdfPendingRender.filePath,
+        pageNumber: pdfPendingRender.pageNumber,
+        sessionKey: pdfPendingRender.sessionKey,
+      })
+
+      try {
+        const firstAttempt = await renderPdfCanvasAttempt(
+          pdfPendingRender.page,
+          pdfPendingRender.viewport,
+          'initial-render',
+        )
+        // A white canvas is not automatically a failed render: some PDFs have
+        // legitimate blank pages. Old scanned/resource-heavy PDFs with a white
+        // controlled canvas still fall back when stronger evidence suggests the
+        // visible render failed.
+        const firstAttemptLooksBlank =
+          shouldTreatBlankCanvasAsRenderFailure({
+            blankProbe: firstAttempt.blankProbe,
+            hasImageOperatorEvidence: firstAttempt.hasImageOperatorEvidence,
+            safeSparseValidPageAllowed: firstAttempt.safeSparseValidPageAllowed,
+            resourceOrDependencyOperatorCount:
+              firstAttempt.resourceOrDependencyOperatorCount,
+            strongTextEvidence: firstAttempt.strongTextEvidence,
+          })
+
+        if (!firstAttemptLooksBlank) {
+          applyPdfRenderAttemptResult(firstAttempt)
+          finalizePdfRenderProbeDiagnostic(
+            firstAttempt.safeSparseValidPageAllowed
+              ? 'blank-canvas-false-positive-avoided'
+              : firstAttempt.blankProbe.isProbablyBlank
+                ? 'valid-blank-page'
+                : 'render-success',
+          )
+          setPdfRenderProbeDiagnostic((current) => ({
+            ...current,
+            lastAttempt: current.lastAttempt
+              ? {
+                  ...current.lastAttempt,
+                  renderDecisionReason: firstAttempt.safeSparseValidPageAllowed
+                    ? 'Sparse valid page guard matched.'
+                    : firstAttempt.blankProbe.isProbablyBlank
+                      ? firstAttempt.validBlankPageAllowed
+                        ? 'Blank page stayed controlled because it looked like a valid blank page without strong text/image/resource evidence.'
+                      : 'Blank page stayed controlled after the current checks found no stronger evidence of failed visible rendering.'
+                      : 'Controlled render succeeded normally.',
+                }
+              : current.lastAttempt,
+          }))
+          setPdfRenderError('')
           return
         }
 
-        if (!nextPageTextAnalysis) {
-          const hasRenderableTextItems = textContentItems.some(isRenderablePdfTextItem)
-          const nextTokens: PdfTextToken[] = []
-
-          if (ENABLE_EXPERIMENTAL_PDF_TEXT_NOTES && hasRenderableTextItems) {
-            const itemGeometries = textContentItems
-              .filter(isRenderablePdfTextItem)
-              .map((item, itemIndex) =>
-                computePdfTextItemGeometry(
-                  item,
-                  pdfPendingRender.viewport,
-                  itemIndex,
-                  pdfPendingRender.pageNumber,
-                ),
-              )
-              .filter((item): item is PdfTextItemGeometry => item !== null)
-            let tokenIndex = 0
-
-            itemGeometries.forEach((itemGeometry) => {
-              const itemTokens = computePdfTextTokens(itemGeometry, tokenIndex)
-              nextTokens.push(...itemTokens)
-              tokenIndex += itemTokens.length
-            })
-          }
-
-          nextPageTextAnalysis = {
-            cacheKey: pageTextAnalysisCacheKey,
-            pageNumber: pdfPendingRender.pageNumber,
-            textLayerStatus:
-              ENABLE_EXPERIMENTAL_PDF_TEXT_NOTES && nextTokens.length > 0
-                ? 'available'
-                : 'empty',
-            tokens: nextTokens,
-            ...computePdfPageTextAnalysis(
-              nextTokens,
-              pdfPendingRender.viewport.width,
-              hasRenderableTextItems,
-            ),
-          }
-          pdfPageTextAnalysisCacheRef.current.set(
-            pageTextAnalysisCacheKey,
-            nextPageTextAnalysis,
-          )
-        }
-
-        const hasRenderableTextItems = nextPageTextAnalysis.hasRenderableTextItems
-        const renderedCanvasLooksBlank = isRenderedPdfCanvasEffectivelyBlank(canvas)
-
-        if (renderedCanvasLooksBlank && hasRenderableTextItems) {
-          throw new Error(
-            'Controlled PDF render produced a blank page for this document. Falling back to embedded PDF preview.',
-          )
-        }
-
-        if (ENABLE_EXPERIMENTAL_PDF_TEXT_NOTES) {
-          if (!isStaleRenderRequest()) {
-            setPdfTextTokens(nextPageTextAnalysis.tokens)
-            setPdfTextLayerStatus(nextPageTextAnalysis.textLayerStatus)
-            setPdfPageTextAnalysis(nextPageTextAnalysis)
-          }
-        } else if (!isStaleRenderRequest()) {
-          setPdfTextTokens([])
-          setPdfTextLayerStatus('empty')
-          setPdfPageTextAnalysis(null)
-        }
+        appendPdfRenderProbeStage('blank-canvas-suspected')
+        await waitForBlankCanvasRetryDelay(180)
 
         if (isStaleRenderRequest()) {
+          finalizePdfRenderProbeDiagnostic('render-cancelled-or-stale')
           return
         }
 
-        setPdfRenderError('')
-      } catch (error) {
+        const delayedBlankProbe = isRenderedPdfCanvasEffectivelyBlank(canvas)
+        appendPdfBlankProbeResult('post-delay-resample', delayedBlankProbe)
+        const delayedAttemptLooksBlank =
+          shouldTreatBlankCanvasAsRenderFailure({
+            blankProbe: delayedBlankProbe,
+            hasImageOperatorEvidence: firstAttempt.hasImageOperatorEvidence,
+            safeSparseValidPageAllowed:
+              evaluateSparseValidPageGuard({
+                blankProbe: delayedBlankProbe,
+                pageTextAnalysis: firstAttempt.pageTextAnalysis,
+              }).matched &&
+              !firstAttempt.hasImageOperatorEvidence &&
+              firstAttempt.resourceOrDependencyOperatorCount <= 1,
+            resourceOrDependencyOperatorCount:
+              firstAttempt.resourceOrDependencyOperatorCount,
+            strongTextEvidence: getStrongTextEvidence(firstAttempt.pageTextAnalysis),
+          })
+
+        if (!delayedAttemptLooksBlank) {
+          applyPdfRenderAttemptResult(firstAttempt)
+          finalizePdfRenderProbeDiagnostic(
+            (evaluateSparseValidPageGuard({
+              blankProbe: delayedBlankProbe,
+              pageTextAnalysis: firstAttempt.pageTextAnalysis,
+            }).matched &&
+              !firstAttempt.hasImageOperatorEvidence &&
+              firstAttempt.resourceOrDependencyOperatorCount <= 1)
+              ? 'blank-canvas-false-positive-avoided'
+              : delayedBlankProbe.isProbablyBlank
+                ? 'valid-blank-page'
+              : 'retry-recovered',
+            {
+              recoveredAfterRetry: true,
+            },
+          )
+          setPdfRenderProbeDiagnostic((current) => ({
+            ...current,
+            lastAttempt: current.lastAttempt
+              ? {
+                  ...current.lastAttempt,
+                  renderDecisionReason:
+                    (evaluateSparseValidPageGuard({
+                      blankProbe: delayedBlankProbe,
+                      pageTextAnalysis: firstAttempt.pageTextAnalysis,
+                    }).matched &&
+                      !firstAttempt.hasImageOperatorEvidence &&
+                      firstAttempt.resourceOrDependencyOperatorCount <= 1)
+                    ? 'Sparse valid page guard matched after delay resample.'
+                    : delayedBlankProbe.isProbablyBlank
+                      ? 'Blank page stayed controlled after delay because there was still no strong text/image/resource evidence of failed visible rendering.'
+                      : 'Retry resample cleared the blank-page suspicion.',
+                }
+              : current.lastAttempt,
+          }))
+          setPdfRenderError('')
+          return
+        }
+
+        appendPdfRenderProbeStage('blank-canvas-after-delay-retry')
+        const cachedPdfDocument = getCachedPdfDocumentForRender()
+
+        if (!cachedPdfDocument) {
+          throw createRenderProbeError(
+            'render-cancelled-or-stale',
+            'Active PDF document changed before the blank-canvas retry could continue.',
+          )
+        }
+
+        let reacquiredPage: PDFPageProxy
+
+        try {
+          reacquiredPage = await cachedPdfDocument.getPage(pdfPendingRender.pageNumber)
+        } catch (error) {
+          throw createRenderProbeError(
+            'page-load-failed',
+            error instanceof Error
+              ? error.message
+              : 'Could not reacquire the current PDF page for blank-canvas retry.',
+          )
+        }
+
+        if (isStaleRenderRequest()) {
+          finalizePdfRenderProbeDiagnostic('render-cancelled-or-stale')
+          return
+        }
+
+        const pageReacquireAttempt = await renderPdfCanvasAttempt(
+          reacquiredPage,
+          pdfPendingRender.viewport,
+          'page-reacquire-retry',
+        )
+        const pageReacquireLooksBlank =
+          shouldTreatBlankCanvasAsRenderFailure({
+            blankProbe: pageReacquireAttempt.blankProbe,
+            hasImageOperatorEvidence: pageReacquireAttempt.hasImageOperatorEvidence,
+            safeSparseValidPageAllowed: pageReacquireAttempt.safeSparseValidPageAllowed,
+            resourceOrDependencyOperatorCount:
+              pageReacquireAttempt.resourceOrDependencyOperatorCount,
+            strongTextEvidence: pageReacquireAttempt.strongTextEvidence,
+          })
+
+        if (!pageReacquireLooksBlank) {
+          applyPdfRenderAttemptResult(pageReacquireAttempt)
+          finalizePdfRenderProbeDiagnostic(
+            pageReacquireAttempt.safeSparseValidPageAllowed
+              ? 'blank-canvas-false-positive-avoided'
+              : pageReacquireAttempt.blankProbe.isProbablyBlank
+                ? 'valid-blank-page'
+              : 'retry-recovered',
+            {
+              recoveredAfterRetry: true,
+            },
+          )
+          setPdfRenderProbeDiagnostic((current) => ({
+            ...current,
+            lastAttempt: current.lastAttempt
+              ? {
+                  ...current.lastAttempt,
+                  renderDecisionReason: pageReacquireAttempt.safeSparseValidPageAllowed
+                    ? 'Sparse valid page guard matched after page reacquire.'
+                    : pageReacquireAttempt.blankProbe.isProbablyBlank
+                      ? 'Blank page stayed controlled after page reacquire because there was still no strong text/image/resource evidence of failed visible rendering.'
+                      : 'Page reacquire retry recovered visible rendering.',
+                }
+              : current.lastAttempt,
+          }))
+          setPdfRenderError('')
+          return
+        }
+
+        appendPdfRenderProbeStage('blank-canvas-after-page-reacquire')
+        const alternateScale = getAlternatePdfRetryScale(pdfPendingRender.viewport.scale)
+
+        if (alternateScale !== null) {
+          const alternateViewport = reacquiredPage.getViewport({ scale: alternateScale })
+          const scaleRetryAttempt = await renderPdfCanvasAttempt(
+            reacquiredPage,
+            alternateViewport,
+            'scale-retry',
+          )
+          const scaleRetryLooksBlank =
+            shouldTreatBlankCanvasAsRenderFailure({
+              blankProbe: scaleRetryAttempt.blankProbe,
+              hasImageOperatorEvidence: scaleRetryAttempt.hasImageOperatorEvidence,
+              safeSparseValidPageAllowed: scaleRetryAttempt.safeSparseValidPageAllowed,
+              resourceOrDependencyOperatorCount:
+                scaleRetryAttempt.resourceOrDependencyOperatorCount,
+              strongTextEvidence: scaleRetryAttempt.strongTextEvidence,
+            })
+
+          if (!scaleRetryLooksBlank) {
+            setPdfRenderedPage((current) =>
+              current &&
+              current.requestId === pdfPendingRender.requestId &&
+              current.sessionKey === pdfPendingRender.sessionKey &&
+              normalizeDesktopFilePath(current.filePath) === targetFilePath
+                ? {
+                    ...current,
+                    height: Math.ceil(scaleRetryAttempt.viewport.height),
+                    width: Math.ceil(scaleRetryAttempt.viewport.width),
+                  }
+                : current,
+            )
+            setPdfPendingRender((current) =>
+              current &&
+              current.requestId === pdfPendingRender.requestId &&
+              current.sessionKey === pdfPendingRender.sessionKey &&
+              normalizeDesktopFilePath(current.filePath) === targetFilePath
+                ? {
+                    ...current,
+                    page: reacquiredPage,
+                    viewport: scaleRetryAttempt.viewport,
+                  }
+                : current,
+            )
+            applyPdfRenderAttemptResult(scaleRetryAttempt)
+            finalizePdfRenderProbeDiagnostic(
+              scaleRetryAttempt.safeSparseValidPageAllowed
+                ? 'blank-canvas-false-positive-avoided'
+                : scaleRetryAttempt.blankProbe.isProbablyBlank
+                  ? 'valid-blank-page'
+                  : 'retry-recovered',
+              {
+                recoveredAfterRetry: true,
+              },
+            )
+            setPdfRenderProbeDiagnostic((current) => ({
+              ...current,
+              lastAttempt: current.lastAttempt
+                ? {
+                    ...current.lastAttempt,
+                    renderDecisionReason: scaleRetryAttempt.safeSparseValidPageAllowed
+                      ? 'Sparse valid page guard matched after scale retry.'
+                      : scaleRetryAttempt.blankProbe.isProbablyBlank
+                        ? 'Blank page stayed controlled after scale retry because there was still no strong text/image/resource evidence of failed visible rendering.'
+                        : 'Scale retry recovered visible rendering.',
+                  }
+                : current.lastAttempt,
+            }))
+            setPdfRenderError('')
+            return
+          }
+
+          appendPdfRenderProbeStage('blank-canvas-after-scale-retry')
+        }
+
+        throw createRenderProbeError(
+          'fallback-selected',
+          'Controlled PDF render produced a blank page for this document. Falling back to embedded PDF preview.',
+        )
+      } catch (rawError) {
+        const error = rawError as Error & {
+          pdfRenderProbeClassification?: PdfRenderProbeClassification
+        }
+        const classification = error.pdfRenderProbeClassification ?? 'canvas-render-failed'
         const errorMessage =
           error instanceof Error ? error.message : 'Unknown canvas render error.'
 
-        console.error('[NoteAnchor PDF] canvas render failed:', error)
+        if (import.meta.env.DEV) {
+          console.error('[NoteAnchor PDF] canvas render failed:', error)
+        }
 
         if (isStaleRenderRequest()) {
+          finalizePdfRenderProbeDiagnostic('render-cancelled-or-stale')
           return
         }
+
+        finalizePdfRenderProbeDiagnostic(classification, {
+          fallbackSelected: classification === 'fallback-selected',
+        })
 
         setPdfRenderedPage(null)
         setPdfPendingRender(null)
@@ -4979,8 +5813,8 @@ function App() {
 
     return () => {
       cancelled = true
-      renderTask?.cancel()
-      textLayerBuilder.cancel()
+      activeRenderTask?.cancel()
+      activeTextLayerBuilder?.cancel()
       textLayerHost.replaceChildren()
     }
   }, [
@@ -7070,7 +7904,6 @@ function App() {
     setPendingDeleteNoteId(null)
     setDesktopOpenStatus('')
     setDesktopNotesStatus('')
-    setBridgeStatus('')
     setIsDebugToolsOpen(false)
     setIsHelpOpen(false)
     setPrintPreview(null)
@@ -7214,50 +8047,6 @@ function App() {
       resetPdfReadingScrollContainers,
     ],
   )
-
-  const handleTestNativeBridge = async () => {
-    if (isBridgePending) {
-      return
-    }
-
-    setIsBridgePending(true)
-    setBridgeStatus('Calling native bridge...')
-
-    const globalState = globalThis as typeof globalThis & {
-      __TAURI_INTERNALS__?: unknown
-      isTauri?: unknown
-    }
-
-    console.info('[NoteAnchor bridge] button clicked')
-    console.info('[NoteAnchor bridge] global runtime flags', {
-      hasInternals: Boolean(globalState.__TAURI_INTERNALS__),
-      isTauriFlag: Boolean(globalState.isTauri),
-    })
-
-    try {
-      const { invoke, isTauri } = await import('@tauri-apps/api/core')
-      console.info('[NoteAnchor bridge] @tauri-apps/api/core imported')
-
-      const runtimeDetected = isTauri()
-      console.info('[NoteAnchor bridge] Tauri runtime detected:', runtimeDetected)
-
-      if (!runtimeDetected) {
-        setBridgeStatus('Native bridge is available only in the desktop app.')
-        return
-      }
-
-      console.info("[NoteAnchor bridge] invoking 'ping'")
-      const message = await invoke<string>('ping')
-      console.info('[NoteAnchor bridge] invoke succeeded:', message)
-      setBridgeStatus(message)
-    } catch (error) {
-      const errorMessage = getBridgeErrorMessage(error)
-      console.error('[NoteAnchor bridge] invoke failed:', error)
-      setBridgeStatus(`Native bridge error: ${errorMessage}`)
-    } finally {
-      setIsBridgePending(false)
-    }
-  }
 
   const rememberRecentDesktopDocument = useCallback(
     (nextDocument: DocumentMetadata) => {
@@ -9355,44 +10144,6 @@ function App() {
                           ? 'Tracking unavailable until next save'
                           : 'No warning'}
                     </span>
-                  </div>
-                  <div className="info-panel-row">
-                    <span className="info-panel-label">Active note id</span>
-                    <span className="info-panel-value">
-                      {activeNoteId ?? 'none'}
-                    </span>
-                  </div>
-                  {currentDocument.documentContentHash ? (
-                    <div className="info-panel-row">
-                      <span className="info-panel-label">Document hash (technical)</span>
-                      <span
-                        className="info-panel-value info-panel-value-hash"
-                        title={currentDocument.documentContentHash}
-                      >
-                        {currentDocument.documentContentHash}
-                      </span>
-                    </div>
-                  ) : null}
-                  {bridgeStatus ? (
-                    <div className="info-panel-row">
-                      <span className="info-panel-label">Desktop bridge</span>
-                      <span className="info-panel-value">{bridgeStatus}</span>
-                    </div>
-                  ) : null}
-                  <div className="debug-tools-actions">
-                    <button type="button" onClick={handleOpenTextFile}>
-                      Browser fallback
-                    </button>
-                    <button
-                      className="debug-button"
-                      disabled={isBridgePending}
-                      type="button"
-                      onClick={() => {
-                        void handleTestNativeBridge()
-                      }}
-                    >
-                      Test desktop bridge
-                    </button>
                   </div>
                 </div>
               ) : (
